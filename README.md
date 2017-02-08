@@ -19,11 +19,6 @@ Only tested with `Swift 3`, `RealmSwift 2.4.2` and `Firebase SDK 3.12.0`
 Below is a minimal usage example. Take a look at the the demo project for more details.
 
 ```swift
-// AppDelegate.swift
-FIRApp.configure()
-
-RealmFire.startSync
-
 // Person.swift
 class Person: SyncObject {
     dynamic var name = ""
@@ -31,19 +26,15 @@ class Person: SyncObject {
 }
 
 // ViewController.swift
-
 let realm = try! Realm()
 try! realm.write {
     let person = realm.create(Person.self)
     person.name = "John"
     person.age = 25
-    person.markForSync()
-
-    // Marking for sync will uploaded it at the next sync 
-    person.markForSync()
+    RealmFire.markForSync(person)
 }
 
-// The sync call attempts to sync all objects marked for synced
+// The sync call attempts to sync all changed objects and fetch changed firebase objects
 RealmFire.sync(realm, firDatabase)
 
 ```
