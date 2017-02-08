@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="11542" systemVersion="16B2555" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" colorMatched="YES" initialViewController="BYZ-38-t0r">
+    <device id="retina4_7" orientation="portrait">
+        <adaptation id="fullscreen"/>
+    </device>
+    <dependencies>
+        <deployment identifier="iOS"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="11524"/>
+        <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+    </dependencies>
+    <scenes>
+        <!--View Controller-->
+        <scene sceneID="tne-QT-ifu">
+            <objects>
+                <viewController id="BYZ-38-t0r" customClass="ViewController" customModule="RealmFireDemo" customModuleProvider="target" sceneMemberID="viewController">
+                    <layoutGuides>
+                        <viewControllerLayoutGuide type="top" id="y3c-jy-aDJ"/>
+                        <viewControllerLayoutGuide type="bottom" id="wfy-db-euE"/>
+                    </layoutGuides>
+                    <view key="view" contentMode="scaleToFill" id="8bC-Xf-vdC">
+                        <rect key="frame" x="0.0" y="0.0" width="375" height="667"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <subviews>
+                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="RealmFireDemo" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="ZXU-VW-Xw0">
+                                <rect key="frame" x="127" y="120" width="121" height="20.5"/>
+                                <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                <nil key="textColor"/>
+                                <nil key="highlightedColor"/>
+                            </label>
+                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="fbH-l1-eza">
+                                <rect key="frame" x="164.5" y="197.5" width="46" height="30"/>
+                                <state key="normal" title="Create"/>
+                                <connections>
+                                    <action selector="create:" destination="BYZ-38-t0r" eventType="touchUpInside" id="G6R-Gc-am5"/>
+                                </connections>
+                            </button>
+                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="eje-Dk-Zra">
+                                <rect key="frame" x="172.5" y="235.5" width="30" height="30"/>
+                                <state key="normal" title="Edit"/>
+                                <connections>
+                                    <action selector="editClicked:" destination="BYZ-38-t0r" eventType="touchUpInside" id="zzw-0X-1qd"/>
+                                </connections>
+                            </button>
+                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="pVd-Ie-2aC">
+                                <rect key="frame" x="165" y="273.5" width="45" height="30"/>
+                                <state key="normal" title="Delete"/>
+                                <connections>
+                                    <action selector="deleteClicked:" destination="BYZ-38-t0r" eventType="touchUpInside" id="nJS-gY-jCV"/>
+                                </connections>
+                            </button>
+                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="oUE-fX-yn5">
+                                <rect key="frame" x="169.5" y="311.5" width="36" height="30"/>
+                                <state key="normal" title="Clear"/>
+                                <connections>
+                                    <action selector="clearAll:" destination="BYZ-38-t0r" eventType="touchUpInside" id="LLd-sw-V1Q"/>
+                                </connections>
+                            </button>
+                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="dvo-MJ-VuE">
+                                <rect key="frame" x="168" y="349.5" width="39" height="30"/>
+                                <state key="normal" title="Fetch"/>
+                                <connections>
+                                    <action selector="fetchCliced:" destination="BYZ-38-t0r" eventType="touchUpInside" id="cmU-6A-GAc"/>
+                                </connections>
+                            </button>
+                            <segmentedControl opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="top" segmentControlStyle="plain" selectedSegmentIndex="0" translatesAutoresizingMaskIntoConstraints="NO" id="rnr-l0-ct5">
+                                <rect key="frame" x="131" y="155.5" width="113" height="29"/>
+                                <segments>
+                                    <segment title="Dog"/>
+                                    <segment title="Person"/>
+                                </segments>
+                            </segmentedControl>
+                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="kiA-AA-dDG">
+                                <rect key="frame" x="163" y="387.5" width="50" height="30"/>
+                                <state key="normal" title="Upload"/>
+                                <connections>
+                                    <action selector="uploadClicked:" destination="BYZ-38-t0r" eventType="touchUpInside" id="KNc-x1-zGN"/>
+                                </connections>
+                            </button>
+                        </subviews>
+                        <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                        <constraints>
+                            <constraint firstItem="dvo-MJ-VuE" firstAttribute="top" secondItem="oUE-fX-yn5" secondAttribute="bottom" constant="8" id="1E2-NS-eiL"/>
+                            <constraint firstItem="rnr-l0-ct5" firstAttribute="top" secondItem="ZXU-VW-Xw0" secondAttribute="bottom" constant="15" id="1Vw-Oz-9vh"/>
+                            <constraint firstItem="pVd-Ie-2aC" firstAttribute="centerX" secondItem="8bC-Xf-vdC" secondAttribute="centerX" id="1cH-bi-uNU"/>
+                            <constraint firstItem="rnr-l0-ct5" firstAttribute="centerX" secondItem="8bC-Xf-vdC" secondAttribute="centerX" id="C50-zQ-rnV"/>
+                            <constraint firstItem="pVd-Ie-2aC" firstAttribute="top" secondItem="eje-Dk-Zra" secondAttribute="bottom" constant="8" id="Ipd-Ne-FkN"/>
+                            <constraint firstItem="dvo-MJ-VuE" firstAttribute="centerX" secondItem="8bC-Xf-vdC" secondAttribute="centerX" id="MNb-Qm-ymf"/>
+                            <constraint firstItem="oUE-fX-yn5" firstAttribute="centerX" secondItem="8bC-Xf-vdC" secondAttribute="centerX" id="SUu-Cs-Ocf"/>
+                            <constraint firstItem="eje-Dk-Zra" firstAttribute="top" secondItem="fbH-l1-eza" secondAttribute="bottom" constant="8" id="Smw-DC-vfX"/>
+                            <constraint firstItem="fbH-l1-eza" firstAttribute="top" secondItem="rnr-l0-ct5" secondAttribute="bottom" constant="14" id="ThK-tR-sPt"/>
+                            <constraint firstItem="ZXU-VW-Xw0" firstAttribute="top" secondItem="y3c-jy-aDJ" secondAttribute="bottom" constant="100" id="V1f-ju-ri4"/>
+                            <constraint firstItem="oUE-fX-yn5" firstAttribute="top" secondItem="pVd-Ie-2aC" secondAttribute="bottom" constant="8" id="Xn9-BY-gPX"/>
+                            <constraint firstItem="eje-Dk-Zra" firstAttribute="centerX" secondItem="8bC-Xf-vdC" secondAttribute="centerX" id="Y8y-52-Bfq"/>
+                            <constraint firstItem="kiA-AA-dDG" firstAttribute="top" secondItem="dvo-MJ-VuE" secondAttribute="bottom" constant="8" id="gNK-8n-JMz"/>
+                            <constraint firstItem="fbH-l1-eza" firstAttribute="centerX" secondItem="8bC-Xf-vdC" secondAttribute="centerX" id="ifx-NC-SfS"/>
+                            <constraint firstItem="ZXU-VW-Xw0" firstAttribute="centerX" secondItem="8bC-Xf-vdC" secondAttribute="centerX" id="rgg-do-wnC"/>
+                            <constraint firstItem="kiA-AA-dDG" firstAttribute="centerX" secondItem="8bC-Xf-vdC" secondAttribute="centerX" id="ydc-8h-evo"/>
+                        </constraints>
+                    </view>
+                    <connections>
+                        <outlet property="objectTypeSwitch" destination="rnr-l0-ct5" id="yb8-0y-H1T"/>
+                    </connections>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="dkx-z0-nzr" sceneMemberID="firstResponder"/>
+            </objects>
+        </scene>
+    </scenes>
+</document>
