@@ -46,7 +46,7 @@ try! realm.write {
 // The sync call attempts to sync all objects marked for synced
 RealmFire.sync(realm, firDatabase)
 
-``` `
+```
 
 ## Reference
 
