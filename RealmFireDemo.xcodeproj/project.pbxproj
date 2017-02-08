@@ -63,7 +63,6 @@
 		40BB5BFD1D8DD7B80086F793 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		40BB5C0A1D8DE07C0086F793 /* GoogleService-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		40BB5C0C1D8DE0CB0086F793 /* Dog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Dog.swift; sourceTree = "<group>"; };
-		40C5CB911DD8C3F10064C847 /* README.md */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = RealmFire/README.md; sourceTree = "<group>"; };
 		40F2526D1DEDDFEB00510545 /* TypeHandler.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TypeHandler.swift; sourceTree = "<group>"; };
 		40F2526F1DEF194300510545 /* DataObject.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DataObject.swift; sourceTree = "<group>"; };
 		68B71B8D963A623994C047F4 /* Pods_RealmFireDemoTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RealmFireDemoTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -124,7 +123,6 @@
 				40BB5BE41D8DD7B80086F793 /* Products */,
 				E4BB71D746062BC4244F8DFB /* Pods */,
 				15D877D093C6E6CCAB9980E8 /* Frameworks */,
-				40C5CB911DD8C3F10064C847 /* README.md */,
 			);
 			sourceTree = "<group>";
 		};
