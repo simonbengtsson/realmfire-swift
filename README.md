@@ -1,5 +1,5 @@
 # RealmFire for Swift
-RealmFire aim is to autoamtically sync a local realm with a firebase database.
+RealmFire's aim is to automatically sync a local realm database with firebase.
 
 *NOTE! This is an inofficial library which currently is nothing more then a proof of concept. Feel free to post issues if you have any feedback or let me know that you aim to use it and for what.*
 
