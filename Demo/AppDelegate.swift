@@ -16,7 +16,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             realm.deleteAll()
         }
 
-        FIRApp.configure()
+        FirebaseApp.configure()
         
         RealmFire.setErrorHandler { error in
             switch error {

@@ -26,7 +26,7 @@ public class RealmFire {
     
     static var error: RealmFireError!
     
-    static public func sync(realm: Realm? = nil, database: FIRDatabase? = nil) {
+    static public func sync(realm: Realm? = nil, database: Database? = nil) {
         let syncer = Syncer(realm: realm, database: database)
         syncer.fetchUpdatedObjects()
         syncer.uploadModifiedObjects()
@@ -76,7 +76,7 @@ public class RealmFire {
         // This should only happen one time and only if realm is initialized before firebase.
         // if false { return "" } todo
         // Should not matter which firebase database or path that is used
-        let ref = FIRDatabase.database().reference(withPath: "realmfire")
-        return ref.childByAutoId().key
+        let ref = Database.database().reference(withPath: "realmfire")
+        return ref.childByAutoId().key ?? ""
     }
 }

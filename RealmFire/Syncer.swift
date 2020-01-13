@@ -5,11 +5,11 @@ import RealmSwift
 class Syncer {
     var metaHandler: MetaHandler
     var config: Realm.Configuration
-    var database: FIRDatabase
+    var database: Database
     
-    init(realm: Realm?, database: FIRDatabase?) {
+    init(realm: Realm?, database: Database?) {
         self.metaHandler = MetaHandler()
-        self.database = database ?? FIRDatabase.database()
+        self.database = database ?? Database.database()
         self.config = realm?.configuration ?? Realm.Configuration.defaultConfiguration
     }
     
@@ -70,7 +70,7 @@ class Syncer {
             data[type.primaryKey()!] = key
             let object = mapper.decode(dataObjectValue: data, type: type)
             if let object = object {
-                realm.add(object, update: true)
+                realm.add(object, update: .all)
             } else {
                 RealmFire.reportError(.firebaseMalformedResult)
             }
@@ -136,7 +136,7 @@ class Syncer {
     }
     
     // Returns a Firebase database reference for this collection
-    private func dbref(forType type: SyncObject.Type, child: String? = nil) -> FIRDatabaseReference {
+    private func dbref(forType type: SyncObject.Type, child: String? = nil) -> DatabaseReference {
         let collectionRef = database.reference(withPath: type.collectionName())
         if let child = child {
             return collectionRef.child(child)
