@@ -52,7 +52,7 @@ class Mapper {
         let customAttributes = type(of: object).customAttributes()
         var data = [String: Any]()
         for prop in object.objectSchema.properties {
-            if ignored.index(of: prop.name) == nil && !object.encode(prop: prop, result: &data) {
+            if ignored.firstIndex(of: prop.name) == nil && !object.encode(prop: prop, result: &data) {
                 let attr = customAttributes[prop.name] ?? prop.name
                 data[attr] = encode(objectProp: prop, object: object)
             }
@@ -66,7 +66,7 @@ class Mapper {
         let ignored = type.ignoredSyncProperties()
         for prop in object.objectSchema.properties {
             let data = dataObjectValue as! [String: Any]
-            if ignored.index(of: prop.name) == nil && !object.decode(prop: prop, data: data) {
+            if ignored.firstIndex(of: prop.name) == nil && !object.decode(prop: prop, data: data) {
                 let attr = customAttributes[prop.name] ?? prop.name
                 let result = decode(objectProp: prop, propValue: data[attr])
 

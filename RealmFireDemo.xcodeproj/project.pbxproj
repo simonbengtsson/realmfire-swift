@@ -228,7 +228,7 @@
 					40BB5BE21D8DD7B80086F793 = {
 						CreatedOnToolsVersion = 8.0;
 						DevelopmentTeam = V5SYU7LHMG;
-						LastSwiftMigration = 1010;
+						LastSwiftMigration = 1130;
 						ProvisioningStyle = Automatic;
 						SystemCapabilities = {
 							com.apple.Keychain = {
@@ -238,7 +238,7 @@
 					};
 					40BB5BF61D8DD7B80086F793 = {
 						CreatedOnToolsVersion = 8.0;
-						LastSwiftMigration = 1010;
+						LastSwiftMigration = 1130;
 						ProvisioningStyle = Automatic;
 						TestTargetID = 40BB5BE21D8DD7B80086F793;
 					};
@@ -535,7 +535,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.realmfire.RealmFireDemo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_SWIFT3_OBJC_INFERENCE = On;
-				SWIFT_VERSION = 4.2;
+				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
 		};
@@ -552,7 +552,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.realmfire.RealmFireDemo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_SWIFT3_OBJC_INFERENCE = On;
-				SWIFT_VERSION = 4.2;
+				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
 		};
@@ -579,7 +579,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.realmfire.RealmFireDemoTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_SWIFT3_OBJC_INFERENCE = On;
-				SWIFT_VERSION = 4.2;
+				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RealmFireDemo.app/RealmFireDemo";
 			};
 			name = Debug;
@@ -607,7 +607,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.realmfire.RealmFireDemoTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_SWIFT3_OBJC_INFERENCE = On;
-				SWIFT_VERSION = 4.2;
+				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RealmFireDemo.app/RealmFireDemo";
 			};
 			name = Release;
