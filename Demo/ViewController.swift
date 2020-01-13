@@ -1,4 +1,5 @@
 import UIKit
+import Firebase
 import RealmSwift
 
 class ViewController: UIViewController {
