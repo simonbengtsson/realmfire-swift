@@ -23,7 +23,6 @@
 #include <cstdint>
 #include <string>
 
-#include <realm/util/safe_int_ops.hpp>
 #include <realm/string_data.hpp>
 #include <realm/util/features.h>
 #include <realm/utilities.hpp>
@@ -82,7 +81,7 @@ bool set_string_compare_method(string_compare_method_t method, StringCompareCall
 size_t sequence_length(char lead);
 
 // Limitations for case insensitive string search
-// Case insensitive search (equal, begins_with, ends_with and contains)
+// Case insensitive search (equal, begins_with, ends_with, like and contains)
 // only works for unicodes 0...0x7f which is the same as the 0...127
 // ASCII character set (letters a-z and A-Z).
 

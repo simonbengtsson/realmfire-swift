@@ -51,27 +51,12 @@ public struct SortDescriptor {
         self.ascending = ascending
     }
 
-    /**
-     Creates a sort descriptor with the given property and sort order values.
-
-     - parameter property:  The property which the sort descriptor orders results by.
-     - parameter ascending: Whether the descriptor sorts in ascending or descending order.
-     */
-    @available(*, deprecated, renamed: "init(keyPath:ascending:)")
-    public init(property: String, ascending: Bool = true) {
-        self.init(keyPath: property, ascending: ascending)
-    }
-
     // MARK: Functions
 
     /// Returns a copy of the sort descriptor with the sort order reversed.
     public func reversed() -> SortDescriptor {
         return SortDescriptor(keyPath: keyPath, ascending: !ascending)
     }
-
-    /// The key path which the sort descriptor orders results by.
-    @available(*, deprecated, renamed: "keyPath")
-    public var property: String { return keyPath }
 }
 
 // MARK: CustomStringConvertible
@@ -89,9 +74,8 @@ extension SortDescriptor: CustomStringConvertible {
 extension SortDescriptor: Equatable {
     /// Returns whether the two sort descriptors are equal.
     public static func == (lhs: SortDescriptor, rhs: SortDescriptor) -> Bool {
-        // swiftlint:disable:previous valid_docs
         return lhs.keyPath == rhs.keyPath &&
-            lhs.ascending == lhs.ascending
+            lhs.ascending == rhs.ascending
     }
 }
 
@@ -128,4 +112,14 @@ extension SortDescriptor: ExpressibleByStringLiteral {
     public init(stringLiteral value: StringLiteralType) {
         self.init(keyPath: value)
     }
+}
+
+// MARK: Unavailable
+
+extension SortDescriptor {
+    @available(*, unavailable, renamed: "init(keyPath:ascending:)")
+    public init(property: String, ascending: Bool = true) { fatalError() }
+
+    @available(*, unavailable, renamed: "keyPath")
+    public var property: String { fatalError() }
 }

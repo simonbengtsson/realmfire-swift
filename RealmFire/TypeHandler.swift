@@ -35,36 +35,36 @@ class TypeHandler {
 }
 
 extension Object {
-    open override class func initialize() {
+    /*open override class func initialize() {
         super.initialize()
         guard self.className() != SyncObject.className() else { return }
         
         // Add all classes that should be observed and synced
         //TypeHandler.addSyncType(className: self.className(), type: self)
-    }
+    }*/
 }
 
 extension DataObject {
-    open override class func initialize() {
+    /*open override class func initialize() {
         super.initialize()
         guard self.className() != DataObject.className() else { return }
         guard self.className() != SyncObject.className() else { return }
         
         // Add all classes that should be observed and synced
         TypeHandler.addDataType(className: self.className(), type: self)
-    }
+    }*/
 }
 
 extension SyncObject {
-    open override class func initialize() {
-        super.initialize()
+    /*open override class func initialize() {
+        //super.initialize()
         guard self.className() != SyncObject.className() else { return }
         
         // Add all classes that should be observed and synced
         TypeHandler.addSyncType(className: self.className(), type: self)
         
         validateClass()
-    }
+    }*/
     
     private class func validateClass() {
         if self.primaryKey() == nil {

@@ -19,17 +19,7 @@
 #import <Realm/RLMSyncManager.h>
 
 #import "RLMSyncUtil_Private.h"
-
-typedef NS_ENUM(NSUInteger, RLMSyncSystemErrorKind) {
-    // Specific
-    RLMSyncSystemErrorKindClientReset,
-    // General
-    RLMSyncSystemErrorKindClient,
-    RLMSyncSystemErrorKindConnection,
-    RLMSyncSystemErrorKindSession,
-    RLMSyncSystemErrorKindUser,
-    RLMSyncSystemErrorKindUnknown,
-};
+#import "RLMNetworkClient.h"
 
 @class RLMSyncUser, RLMSyncConfiguration;
 
@@ -54,6 +44,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSArray<RLMSyncUser *> *)_allUsers;
 
 + (void)resetForTesting;
+
+- (RLMNetworkRequestOptions *)networkRequestOptions;
 
 NS_ASSUME_NONNULL_END
 

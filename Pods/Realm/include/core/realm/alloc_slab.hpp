@@ -21,6 +21,7 @@
 
 #include <cstdint> // unint8_t etc
 #include <vector>
+#include <map>
 #include <string>
 #include <atomic>
 
@@ -59,6 +60,10 @@ class SlabAlloc : public Allocator {
 public:
     ~SlabAlloc() noexcept override;
     SlabAlloc();
+
+    // Disable copying. Copying an allocator can produce double frees.
+    SlabAlloc(const SlabAlloc&) = delete;
+    SlabAlloc& operator=(const SlabAlloc&) = delete;
 
     /// \struct Config
     /// \brief Storage for combining setup flags for initialization to
@@ -102,6 +107,7 @@ public:
         bool skip_validate = false;
         bool session_initiator = false;
         bool clear_file = false;
+        bool disable_sync = false;
         const char* encryption_key = nullptr;
     };
 
@@ -121,14 +127,6 @@ public:
     /// In shared mode (when this function is called on behalf of a SharedGroup
     /// instance), the caller (SharedGroup::do_open()) must take steps to ensure
     /// cross-process mutual exclusion.
-    ///
-    /// If the attached file contains an empty Realm (one whose top-ref is
-    /// zero), the file format version may remain undecided upon return from
-    /// this function. The file format is undecided if, and only if
-    /// get_file_format_version() returns zero. The caller is required to check
-    /// for this case, and decide on a file format version. This must happen
-    /// before the Realm opening process completes, and the decided file format
-    /// must be set in the allocator by calling set_file_format_version().
     ///
     /// Except for \a file_path, the parameters are passed in through a
     /// configuration object.
@@ -153,14 +151,6 @@ public:
 
     /// Attach this allocator to the specified memory buffer.
     ///
-    /// If the attached buffer contains an empty Realm (one whose top-ref is
-    /// zero), the file format version may remain undecided upon return from
-    /// this function. The file format is undecided if, and only if
-    /// get_file_format_version() returns zero. The caller is required to check
-    /// for this case, and decide on a file format version. This must happen
-    /// before the Realm opening process completes, and the decided file format
-    /// must be set in the allocator by calling set_file_format_version().
-    ///
     /// It is an error to call this function on an attached
     /// allocator. Doing so will result in undefined behavor.
     ///
@@ -176,12 +166,6 @@ public:
     int get_committed_file_format_version() const noexcept;
 
     /// Attach this allocator to an empty buffer.
-    ///
-    /// Upon return from this function, the file format is undecided
-    /// (get_file_format_version() returns zero). The caller is required to
-    /// decide on a file format version. This must happen before the Realm
-    /// opening process completes, and the decided file format must be set in
-    /// the allocator by calling set_file_format_version().
     ///
     /// It is an error to call this function on an attached
     /// allocator. Doing so will result in undefined behavor.
@@ -234,6 +218,12 @@ public:
     /// attached to a file. Doing so will result in undefined behavior.
     void resize_file(size_t new_file_size);
 
+#ifdef REALM_DEBUG
+    /// Deprecated method, only called from a unit test
+    ///
+    /// WARNING: This method is NOT thread safe on multiple platforms; see
+    /// File::prealloc().
+    ///
     /// Reserve disk space now to avoid allocation errors at a later point in
     /// time, and to minimize on-disk fragmentation. In some cases, less
     /// fragmentation translates into improved performance. On SSD-drives
@@ -245,19 +235,18 @@ public:
     /// allocation is done lazily by default). If the file is already bigger
     /// than the specified size, the size will be unchanged, and on-disk
     /// allocation will occur only for the initial section that corresponds to
-    /// the specified size. On systems that do not support preallocation, this
-    /// function has no effect. To know whether preallocation is supported by
-    /// Realm on your platform, call util::File::is_prealloc_supported().
+    /// the specified size.
     ///
     /// This function will call File::sync() if it changes the size of the file.
     ///
     /// It is an error to call this function on an allocator that is not
     /// attached to a file. Doing so will result in undefined behavior.
     void reserve_disk_space(size_t size_in_bytes);
+#endif
 
     /// Get the size of the attached database file or buffer in number
     /// of bytes. This size is not affected by new allocations. After
-    /// attachment, it can only be modified by a call to remap().
+    /// attachment, it can only be modified by a call to update_reader_view().
     ///
     /// It is an error to call this function on a detached allocator,
     /// or one that was attached using attach_empty(). Doing so will
@@ -275,6 +264,8 @@ public:
     /// space.
     void reset_free_space_tracking();
 
+    /// Update the readers view of the file:
+    ///
     /// Remap the attached file such that a prefix of the specified
     /// size becomes available in memory. If sucessfull,
     /// get_baseline() will return the specified new file size.
@@ -288,24 +279,29 @@ public:
     /// guaranteed to be mapped as a contiguous address range. The allocation
     /// of memory in the file must ensure that no allocation crosses the
     /// boundary between two sections.
-    void remap(size_t file_size);
+    ///
+    /// Clears any allocator specicific caching of address translations
+    /// and force any later address translations to trigger decryption if required.
+    void update_reader_view(size_t file_size);
 
     /// Returns true initially, and after a call to reset_free_space_tracking()
     /// up until the point of the first call to SlabAlloc::alloc(). Note that a
     /// call to SlabAlloc::alloc() corresponds to a mutation event.
     bool is_free_space_clean() const noexcept;
 
-    /// \brief Update the file format version field of the allocator.
-    ///
-    /// This must be done during the opening of the Realm if the stored file
-    /// format version is zero (empty Realm), or after the file format is
-    /// upgraded.
-    ///
-    /// Note that this does not modify the attached file, only the "cached"
-    /// value subsequenty returned by get_file_format_version().
-    ///
-    /// \sa get_file_format_version()
-    void set_file_format_version(int) noexcept;
+    /// Returns the amount of memory requested by calls to SlabAlloc::alloc().
+    size_t get_commit_size() const
+    {
+        return m_commit_size;
+    }
+
+    /// Returns the total amount of memory currently allocated in slab area
+    size_t get_allocated_size() const noexcept;
+
+    /// Hooks used to keep the encryption layer informed of the start and stop
+    /// of transactions.
+    void note_reader_start(void* reader_id);
+    void note_reader_end(void* reader_id);
 
     void verify() const override;
 #ifdef REALM_DEBUG
@@ -320,13 +316,43 @@ public:
 
 protected:
     MemRef do_alloc(const size_t size) override;
-    MemRef do_realloc(ref_type, const char*, size_t old_size, size_t new_size) override;
+    MemRef do_realloc(ref_type, char*, size_t old_size, size_t new_size) override;
     // FIXME: It would be very nice if we could detect an invalid free operation in debug mode
-    void do_free(ref_type, const char*) noexcept override;
+    void do_free(ref_type, char*) noexcept override;
     char* do_translate(ref_type) const noexcept override;
-    void invalidate_cache() noexcept;
+
+    /// Returns the first section boundary *above* the given position.
+    size_t get_upper_section_boundary(size_t start_pos) const noexcept;
+
+    /// Returns the first section boundary *at or below* the given position.
+    size_t get_lower_section_boundary(size_t start_pos) const noexcept;
+
+    /// Returns true if the given position is at a section boundary
+    bool matches_section_boundary(size_t pos) const noexcept;
+
+    /// Returns the index of the section holding a given address.
+    /// The section index is determined solely by the minimal section size,
+    /// and does not necessarily reflect the mapping. A mapping may
+    /// cover multiple sections - the initial mapping often does.
+    size_t get_section_index(size_t pos) const noexcept;
+
+    /// Reverse: get the base offset of a section at a given index. Since the
+    /// computation is very time critical, this method just looks it up in
+    /// a table. The actual computation and setup of that table is done
+    /// during initialization with the help of compute_section_base() below.
+    inline size_t get_section_base(size_t index) const noexcept;
+
+    /// Actually compute the starting offset of a section. Only used to initialize
+    /// a table of predefined results, which are then used by get_section_base().
+    size_t compute_section_base(size_t index) const noexcept;
+
+    /// Find a possible allocation of 'request_size' that will fit into a section
+    /// which is inside the range from 'start_pos' to 'start_pos'+'free_chunk_size'
+    /// If found return the position, if not return 0.
+    size_t find_section_in_range(size_t start_pos, size_t free_chunk_size, size_t request_size) const noexcept;
 
 private:
+    void internal_invalidate_cache() noexcept;
     enum AttachMode {
         attach_None,        // Nothing is attached
         attach_OwnedBuffer, // We own the buffer (m_data = nullptr for empty buffer)
@@ -339,16 +365,124 @@ private:
     // extend the amount of space available for database node
     // storage. Inter-node references are represented as file offsets
     // (a.k.a. "refs"), and each slab creates an apparently seamless extension
-    // of this file offset addressable space. Slabes are stored as rows in the
+    // of this file offset addressable space. Slabs are stored as rows in the
     // Slabs table in order of ascending file offsets.
     struct Slab {
         ref_type ref_end;
-        char* addr;
+        std::unique_ptr<char[]> addr;
+        size_t size;
+
+        Slab(ref_type r, size_t s);
     };
-    struct Chunk {
+
+    struct Chunk { // describes a freed in-file block
         ref_type ref;
         size_t size;
     };
+
+    // free blocks that are in the slab area are managed using the following structures:
+    // - FreeBlock: Placed at the start of any free space. Holds the 'ref' corresponding to
+    //              the start of the space, and prev/next links used to place it in a size-specific
+    //              freelist.
+    // - BetweenBlocks: Structure sitting between any two free OR allocated spaces.
+    //                  describes the size of the space before and after.
+    // Each slab (area obtained from the underlying system) has a terminating BetweenBlocks
+    // at the beginning and at the end of the Slab.
+    struct FreeBlock {
+        ref_type ref;    // ref for this entry. Saves a reverse translate / representing links as refs
+        FreeBlock* prev; // circular doubly linked list
+        FreeBlock* next;
+        void clear_links()
+        {
+            prev = next = nullptr;
+        }
+        void unlink();
+    };
+    struct BetweenBlocks { // stores sizes and used/free status of blocks before and after.
+        int32_t block_before_size; // negated if block is in use,
+        int32_t block_after_size;  // positive if block is free - and zero at end
+    };
+
+    Config m_cfg;
+    using FreeListMap = std::map<int, FreeBlock*>;  // log(N) addressing for larger blocks
+    FreeListMap m_block_map;
+
+    // abstract notion of a freelist - used to hide whether a freelist
+    // is residing in the small blocks or the large blocks structures.
+    struct FreeList {
+        int size = 0; // size of every element in the list, 0 if not found
+        FreeListMap::iterator it;
+        bool found_something()
+        {
+            return size != 0;
+        }
+        bool found_exact(int sz)
+        {
+            return size == sz;
+        }
+    };
+
+    // simple helper functions for accessing/navigating blocks and betweenblocks (TM)
+    BetweenBlocks* bb_before(FreeBlock* entry) const {
+        return reinterpret_cast<BetweenBlocks*>(entry) - 1;
+    }
+    BetweenBlocks* bb_after(FreeBlock* entry) const {
+        auto bb = bb_before(entry);
+        size_t sz = bb->block_after_size;
+        char* addr = reinterpret_cast<char*>(entry) + sz;
+        return reinterpret_cast<BetweenBlocks*>(addr);
+    }
+    FreeBlock* block_before(BetweenBlocks* bb) const {
+        size_t sz = bb->block_before_size;
+        if (sz <= 0)
+            return nullptr; // only blocks that are not in use
+        char* addr = reinterpret_cast<char*>(bb) - sz;
+        return reinterpret_cast<FreeBlock*>(addr);
+    }
+    FreeBlock* block_after(BetweenBlocks* bb) const {
+        if (bb->block_after_size <= 0)
+            return nullptr;
+        return reinterpret_cast<FreeBlock*>(bb + 1);
+    }
+    int size_from_block(FreeBlock* entry) const {
+        return bb_before(entry)->block_after_size;
+    }
+    void mark_allocated(FreeBlock* entry);
+    // mark the entry freed in bordering BetweenBlocks. Also validate size.
+    void mark_freed(FreeBlock* entry, int size);
+
+    // hook for the memory verifier in Group.
+    template<typename Func>
+    void for_all_free_entries(Func f) const;
+
+    // Main entry points for alloc/free:
+    FreeBlock* allocate_block(int size);
+    void free_block(ref_type ref, FreeBlock* addr);
+
+    // Searching/manipulating freelists
+    FreeList find(int size);
+    FreeList find_larger(FreeList hint, int size);
+    FreeBlock* pop_freelist_entry(FreeList list);
+    void push_freelist_entry(FreeBlock* entry);
+    void remove_freelist_entry(FreeBlock* element);
+    void rebuild_freelists_from_slab();
+    void clear_freelists();
+
+    // grow the slab area to accommodate the requested size.
+    // returns a free block large enough to handle the request.
+    FreeBlock* grow_slab_for(int request_size);
+    // create a single free chunk with "BetweenBlocks" at both ends and a
+    // single free chunk between them. This free chunk will be of size:
+    //   slab_size - 2 * sizeof(BetweenBlocks)
+    FreeBlock* slab_to_entry(const Slab& slab, ref_type ref_start);
+
+    // breaking/merging of blocks
+    FreeBlock* get_prev_block_if_mergeable(FreeBlock* block);
+    FreeBlock* get_next_block_if_mergeable(FreeBlock* block);
+    // break 'block' to give it 'new_size'. Return remaining block.
+    // If the block is too small to split, return nullptr.
+    FreeBlock* break_block(FreeBlock* block, int new_size);
+    FreeBlock* merge_blocks(FreeBlock* first, FreeBlock* second);
 
     // Values of each used bit in m_flags
     enum {
@@ -398,7 +532,6 @@ private:
     std::unique_ptr<size_t[]> m_section_bases;
     size_t m_num_section_bases = 0;
     AttachMode m_attach_mode = attach_None;
-    bool m_file_on_streaming_form = false;
     enum FeeeSpaceState {
         free_space_Clean,
         free_space_Dirty,
@@ -415,11 +548,11 @@ private:
     /// less padding between members due to alignment requirements.
     FeeeSpaceState m_free_space_state = free_space_Clean;
 
-    typedef std::vector<Slab> slabs;
-    typedef std::vector<Chunk> chunks;
-    slabs m_slabs;
-    chunks m_free_space;
-    chunks m_free_read_only;
+    typedef std::vector<Slab> Slabs;
+    using Chunks = std::map<ref_type, size_t>;
+    Slabs m_slabs;
+    Chunks m_free_read_only;
+    size_t m_commit_size = 0;
 
     bool m_debug_out = false;
     struct hash_entry {
@@ -431,18 +564,20 @@ private:
     mutable size_t version = 1;
 
     /// Throws if free-lists are no longer valid.
-    void consolidate_free_read_only();
+    size_t consolidate_free_read_only();
     /// Throws if free-lists are no longer valid.
-    const chunks& get_free_read_only() const;
+    const Chunks& get_free_read_only() const;
 
     /// Throws InvalidDatabase if the file is not a Realm file, if the file is
     /// corrupted, or if the specified encryption key is incorrect. This
     /// function will not detect all forms of corruption, though.
-    void validate_buffer(const char* data, size_t len, const std::string& path, bool is_shared);
+    void validate_buffer(const char* data, size_t len, const std::string& path);
+    void throw_header_exception(std::string msg, const Header& header, const std::string& path);
 
+    static bool is_file_on_streaming_form(const Header& header);
     /// Read the top_ref from the given buffer and set m_file_on_streaming_form
     /// if the buffer contains a file in streaming form
-    ref_type get_top_ref(const char* data, size_t len);
+    static ref_type get_top_ref(const char* data, size_t len);
 
     class ChunkRefEq;
     class ChunkRefEndEq;
@@ -458,41 +593,12 @@ private:
         m_replication = r;
     }
 
-    /// Returns the first section boundary *above* the given position.
-    size_t get_upper_section_boundary(size_t start_pos) const noexcept;
-
-    /// Returns the first section boundary *at or below* the given position.
-    size_t get_lower_section_boundary(size_t start_pos) const noexcept;
-
-    /// Returns true if the given position is at a section boundary
-    bool matches_section_boundary(size_t pos) const noexcept;
-
-    /// Returns the index of the section holding a given address.
-    /// The section index is determined solely by the minimal section size,
-    /// and does not necessarily reflect the mapping. A mapping may
-    /// cover multiple sections - the initial mapping often does.
-    size_t get_section_index(size_t pos) const noexcept;
-
-    /// Reverse: get the base offset of a section at a given index. Since the
-    /// computation is very time critical, this method just looks it up in
-    /// a table. The actual computation and setup of that table is done
-    /// during initialization with the help of compute_section_base() below.
-    inline size_t get_section_base(size_t index) const noexcept;
-
-    /// Actually compute the starting offset of a section. Only used to initialize
-    /// a table of predefined results, which are then used by get_section_base().
-    size_t compute_section_base(size_t index) const noexcept;
-
-    /// Find a possible allocation of 'request_size' that will fit into a section
-    /// which is inside the range from 'start_pos' to 'start_pos'+'free_chunk_size'
-    /// If found return the position, if not return 0.
-    size_t find_section_in_range(size_t start_pos, size_t free_chunk_size, size_t request_size) const noexcept;
-
     friend class Group;
+    friend class SharedGroup;
     friend class GroupWriter;
 };
 
-inline void SlabAlloc::invalidate_cache() noexcept
+inline void SlabAlloc::internal_invalidate_cache() noexcept
 {
     ++version;
 }
@@ -585,6 +691,33 @@ inline bool SlabAlloc::matches_section_boundary(size_t pos) const noexcept
 inline size_t SlabAlloc::get_section_base(size_t index) const noexcept
 {
     return m_section_bases[index];
+}
+
+template<typename Func>
+void SlabAlloc::for_all_free_entries(Func f) const
+{
+    ref_type ref = m_baseline;
+    for (auto& e : m_slabs) {
+        BetweenBlocks* bb = reinterpret_cast<BetweenBlocks*>(e.addr.get());
+        REALM_ASSERT(bb->block_before_size == 0);
+        while (1) {
+            int size = bb->block_after_size;
+            f(ref, sizeof(BetweenBlocks));
+            ref += sizeof(BetweenBlocks);
+            if (size == 0) {
+                break;
+            }
+            if (size > 0) { // freeblock.
+                f(ref, size);
+                bb = reinterpret_cast<BetweenBlocks*>(reinterpret_cast<char*>(bb) + sizeof(BetweenBlocks) + size);
+                ref += size;
+            }
+            else {
+                bb = reinterpret_cast<BetweenBlocks*>(reinterpret_cast<char*>(bb) + sizeof(BetweenBlocks) - size);
+                ref -= size;
+            }
+        }
+    }
 }
 
 } // namespace realm

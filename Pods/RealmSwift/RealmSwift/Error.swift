@@ -18,7 +18,6 @@
 
 import Realm
 
-/// :nodoc:
 extension Realm {
     /**
      Struct that describes the error codes within the Realm error domain.
@@ -28,42 +27,14 @@ extension Realm {
      ```swift
      let realm: Realm?
      do {
-         realm = Realm()
+         realm = try Realm()
      } catch Realm.Error.incompatibleLockFile {
          print("Realm Browser app may be attached to Realm on device?")
      }
      ```
     */
     public struct Error {
-        // swiftlint:disable:next nesting
-        public enum Code: Int {
-            /// - see: `Realm.Error.fail`
-            case fail
-
-            /// - see: `Realm.Error.fileAccess`
-            case fileAccess
-
-            /// - see: `Realm.Error.filePermissionDenied`
-            case filePermissionDenied
-
-            /// - see: `Realm.Error.fileExists`
-            case fileExists
-
-            /// - see: `Realm.Error.fileNotFound`
-            case fileNotFound
-
-            /// - see: `Realm.Error.incompatibleLockFile`
-            case incompatibleLockFile
-
-            /// - see: `Realm.Error.fileFormatUpgradeRequired`
-            case fileFormatUpgradeRequired
-
-            /// - see: `Realm.Error.addressSpaceExhausted`
-            case addressSpaceExhausted
-
-            /// - see: `Realm.Error.schemaMismatch`
-            case schemaMismatch
-        }
+        public typealias Code = RLMError.Code
 
         /// Error thrown by Realm if no other specific error is returned when a realm is opened.
         public static let fail: Code = .fail
@@ -97,37 +68,34 @@ extension Realm {
         /// Error thrown by Realm if there is a schema version mismatch, so that a migration is required.
         public static let schemaMismatch: Code = .schemaMismatch
 
+        /// Error thrown by Realm when attempting to open an incompatible synchronized Realm file.
+        ///
+        /// This error occurs when the Realm file was created with an older version of Realm and an automatic
+        /// migration to the current version is not possible. When such an error occurs, the original file is moved
+        /// to a backup location, and future attempts to open the synchronized Realm will result in a new file being
+        /// created. If you wish to migrate any data from the backup Realm, you can open it using the provided
+        /// Realm configuration.
+        public static let incompatibleSyncedFile: Code = .incompatibleSyncedFile
+
         /// :nodoc:
         public var code: Code {
-            let rlmError = _nsError as! RLMError
-            switch rlmError.code {
-            case .fail:
-                return .fail
-            case .fileAccess:
-                return .fileAccess
-            case .filePermissionDenied:
-                return .filePermissionDenied
-            case .fileExists:
-                return .fileExists
-            case .fileNotFound:
-                return .fileNotFound
-            case .incompatibleLockFile:
-                return .incompatibleLockFile
-            case .fileFormatUpgradeRequired:
-                return .fileFormatUpgradeRequired
-            case .addressSpaceExhausted:
-                return .addressSpaceExhausted
-            case .schemaMismatch:
-                return .schemaMismatch
-            }
+            return (_nsError as! RLMError).code
         }
 
         /// :nodoc:
-        public var _nsError: NSError // swiftlint:disable:this variable_name
+        public let _nsError: NSError
 
         /// :nodoc:
         public init(_nsError error: NSError) {
             _nsError = error
+        }
+
+        /// Realm configuration that can be used to open the backup copy of a Realm file
+        ///
+        //// Only applicable to `incompatibleSyncedFile`. Will be `nil` for all other errors.
+        public var backupConfiguration: Realm.Configuration? {
+            let configuration = userInfo[RLMBackupRealmConfigurationErrorKey] as! RLMRealmConfiguration?
+            return configuration.map(Realm.Configuration.fromRLMRealmConfiguration)
         }
     }
 }
@@ -136,13 +104,9 @@ extension Realm {
 // Provide bridging from errors with domain RLMErrorDomain to Error.
 extension Realm.Error: _BridgedStoredNSError {
     /// :nodoc:
-    public static var _nsErrorDomain = RLMErrorDomain // swiftlint:disable:this variable_name
-}
-
-/// :nodoc:
-extension Realm.Error.Code: _ErrorCodeProtocol {
+    public static let _nsErrorDomain = RLMErrorDomain
     /// :nodoc:
-    public typealias _ErrorType = RLMError // swiftlint:disable:this type_name
+    public static let errorDomain = RLMErrorDomain
 }
 
 // MARK: Equatable
@@ -150,7 +114,7 @@ extension Realm.Error.Code: _ErrorCodeProtocol {
 extension Realm.Error: Equatable {}
 
 /// Returns a Boolean indicating whether the errors are identical.
-public func == (lhs: Error, rhs: Error) -> Bool { // swiftlint:disable:this valid_docs
+public func == (lhs: Error, rhs: Error) -> Bool {
     return lhs._code == rhs._code
         && lhs._domain == rhs._domain
 }
@@ -161,6 +125,6 @@ public func == (lhs: Error, rhs: Error) -> Bool { // swiftlint:disable:this vali
  Pattern matching matching for `Realm.Error`, so that the instances can be used with Swift's
  `do { ... } catch { ... }` syntax.
 */
-public func ~= (lhs: Realm.Error, rhs: Error) -> Bool { // swiftlint:disable:this valid_docs
+public func ~= (lhs: Realm.Error, rhs: Error) -> Bool {
     return lhs == rhs
 }

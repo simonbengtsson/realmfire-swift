@@ -19,24 +19,29 @@
 #ifndef REALM_STRING_HPP
 #define REALM_STRING_HPP
 
-#include <cstddef>
-#include <algorithm>
-#include <string>
-#include <ostream>
-#include <cstring>
-#include <array>
-#include <vector>
-
-#include <cfloat>
-#include <cmath>
-
+#include <realm/null.hpp>
 #include <realm/util/features.h>
 #include <realm/util/optional.hpp>
-#include <realm/utilities.hpp>
-#include <realm/null.hpp>
-#include <realm/owned_data.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cfloat>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <ostream>
+#include <string>
 
 namespace realm {
+
+/// Selects CityHash64 on 64-bit platforms, and Murmur2 on 32-bit platforms.
+/// This is what libc++ does, and it is a good general choice for a
+/// non-cryptographic hash function (suitable for std::unordered_map etc.).
+size_t murmur2_or_cityhash(const unsigned char* data, size_t len) noexcept;
+
+uint_least32_t murmur2_32(const unsigned char* data, size_t len) noexcept;
+uint_least64_t cityhash_64(const unsigned char* data, size_t len) noexcept;
+
 
 /// A reference to a chunk of character data.
 ///
@@ -92,7 +97,7 @@ public:
 
     // StringData does not store data, callers must manage their own strings.
     template <class T, class A>
-    StringData(std::basic_string<char, T, A>&&) = delete;
+    StringData(const std::basic_string<char, T, A>&&) = delete;
 
     template <class T, class A>
     StringData(const util::Optional<std::basic_string<char, T, A>>&);
@@ -160,11 +165,20 @@ public:
 
     explicit operator bool() const noexcept;
 
+    /// If the StringData is NULL, the hash is 0. Otherwise, the function
+    /// `murmur2_or_cityhash()` is called on the data.
+    size_t hash() const noexcept;
+
 private:
     const char* m_data;
     size_t m_size;
 
     static bool matchlike(const StringData& text, const StringData& pattern) noexcept;
+    static bool matchlike_ins(const StringData& text, const StringData& pattern_upper,
+                              const StringData& pattern_lower) noexcept;
+
+    friend bool string_like_ins(StringData, StringData) noexcept;
+    friend bool string_like_ins(StringData, StringData, StringData) noexcept;
 };
 
 
@@ -331,74 +345,6 @@ inline bool StringData::contains(StringData d, const std::array<uint8_t, 256> &c
     return false;
 }
     
-inline bool StringData::matchlike(const StringData& text, const StringData& pattern) noexcept
-{
-    std::vector<size_t> textpos;
-    std::vector<size_t> patternpos;
-    size_t p1 = 0; // position in text (haystack)
-    size_t p2 = 0; // position in pattern (needle)
-
-    while (true) {
-        if (p1 == text.size()) {
-            if (p2 == pattern.size())
-                return true;
-            if (p2 == pattern.size() - 1 && pattern[p2] == '*')
-                return true;
-            goto no_match;
-        }
-        if (p2 == pattern.size())
-            goto no_match;
-
-        if (pattern[p2] == '*') {
-            textpos.push_back(p1);
-            patternpos.push_back(++p2);
-            continue;
-        }
-        if (pattern[p2] == '?') {
-            // utf-8 encoded characters may take up multiple bytes
-            if ((text[p1] & 0x80) == 0) {
-                ++p1;
-                ++p2;
-                continue;
-            }
-            else {
-                size_t p = 1;
-                while (p1 + p != text.size() && (text[p1 + p] & 0xc0) == 0x80)
-                    ++p;
-                p1 += p;
-                ++p2;
-                continue;
-            }
-        }
-
-        if (pattern[p2] == text[p1]) {
-            ++p1;
-            ++p2;
-            continue;
-        }
-
-    no_match:
-        if (textpos.empty())
-            return false;
-        else {
-            if (p1 == text.size()) {
-                textpos.pop_back();
-                patternpos.pop_back();
-
-                if (textpos.empty())
-                    return false;
-
-                p1 = textpos.back();
-            }
-            else {
-                p1 = textpos.back();
-                textpos.back() = ++p1;
-            }
-            p2 = patternpos.back();
-        }
-    }
-}
-
 inline bool StringData::like(StringData d) const noexcept
 {
     if (is_null() || d.is_null()) {
@@ -441,6 +387,24 @@ inline StringData::operator bool() const noexcept
     return !is_null();
 }
 
+inline size_t StringData::hash() const noexcept
+{
+    if (is_null())
+        return 0;
+    auto unsigned_data = reinterpret_cast<const unsigned char*>(m_data);
+    return murmur2_or_cityhash(unsigned_data, m_size);
+}
+
 } // namespace realm
+
+namespace std {
+template <>
+struct hash<::realm::StringData> {
+    inline size_t operator()(const ::realm::StringData& str) const noexcept
+    {
+        return str.hash();
+    }
+};
+} // namespace std
 
 #endif // REALM_STRING_HPP

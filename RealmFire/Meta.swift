@@ -10,7 +10,8 @@ class MetaHandler {
     /// CollectionMeta
     
     func setLastFetchedAt(for type: SyncObject.Type, date: Date, realm: Realm) {
-        let obj = RealmFireMeta.find(id: type.className(), type: CollectionMeta.type, realm: realm).first ?? RealmFireMeta()
+        //let obj = RealmFireMeta.find(id: type.className(), type: CollectionMeta.type, realm: realm).first ?? RealmFireMeta()
+        let obj = RealmFireMeta.init(data: [:])
         if obj.id.isEmpty {
             obj.id = type.className()
             obj.type = CollectionMeta.type
@@ -21,43 +22,52 @@ class MetaHandler {
     }
     
     func getLastFetchedAt(type: SyncObject.Type, realm: Realm) -> Double {
-        let obj = RealmFireMeta.find(id: type.className(), type: CollectionMeta.type, realm: realm).first
-        return obj?.obtain(CollectionMeta.self).lastFetched ?? 0
+        //let obj = RealmFireMeta.find(id: type.className(), type: CollectionMeta.type, realm: realm).first
+        //return obj?.obtain(CollectionMeta.self).lastFetched ?? 0
+        return 0
     }
     
     /// DeletedObjectMeta
     
-    func allDeletedObjects(realm: Realm) -> [DeletedObjectMeta] {
-        let objects = RealmFireMeta.find(type: DeletedObjectMeta.type, realm: realm)
-        return objects.map { $0.obtain(DeletedObjectMeta.self) }
+    func allDeletedObjects(realm: Realm) -> [CollectionMeta] {
+        //let objects = RealmFireMeta.find(type: DeletedObjectMeta.type, realm: realm)
+        //return objects.map { $0.obtain(DeletedObjectMeta.self) }
+        return []
     }
     
-    func addDeletedObjects<S: Sequence>(key: String, className: String, realm: Realm) {
-        let meta = DeletedObjectMeta(key: key, className: className)
-        DeletedObjectMeta.add(meta, realm: realm)
+    func addDeletedObjects(key: String, className: String, realm: Realm) {
+        //let meta = DeletedObjectMeta(key: key, className: className)
+        //DeletedObjectMeta.add(meta, realm: realm)
     }
     
     func removeDeletedObject(key: String, realm: Realm) {
-        let object = RealmFireMeta.find(id: key, type: DeletedObjectMeta.type, realm: realm)
-        realm.delete(object)
+        //let object = RealmFireMeta.find(id: key, type: DeletedObjectMeta.type, realm: realm)
+        //realm.delete(object)
     }
     
     /// UpdatedObjectMeta
     
-    func allUpdatedObjects(realm: Realm) -> [UpdatedObjectMeta] {
-        let objects = RealmFireMeta.find(type: UpdatedObjectMeta.type, realm: realm)
-        return objects.map { $0.obtain(DeletedObjectMeta.self) }
+    func allUpdatedObjects(realm: Realm) -> [CollectionMeta] {
+        //let objects = RealmFireMeta.find(type: UpdatedObjectMeta.type, realm: realm)
+        //return objects.map { $0.obtain(DeletedObjectMeta.self) }
+        return []
     }
     
     func addUpdatedObjects<S: Sequence>(_ objects: S, realm: Realm) where S.Iterator.Element: SyncObject {
-        let dict = UpdatedObjectMeta(key: key, className: className)
-        objects.forEach { dict[$0.key()] = type(of: $0).className() }
-        UpdatedObjectMeta.add(meta, realm: realm)
+        //let dict = UpdatedObjectMeta(key: key, className: className)
+        //objects.forEach { dict[$0.key()] = type(of: $0).className() }
+        //UpdatedObjectMeta.add(meta, realm: realm)
     }
     
     func removeUpdatedObject(key: String, realm: Realm) {
-        let object = RealmFireMeta.find(id: key, type: UpdatedObjectMeta.type, realm: realm)
-        realm.delete(object)
+        //let object = RealmFireMeta.find(id: key, type: UpdatedObjectMeta.type, realm: realm)
+        //realm.delete(object)
+    }
+    
+    func addDeletedObject(key: String, className: String, realm: Realm) {
+    }
+    
+    func addUpdatedObject(_ object: SyncObject, realm: Realm) {
     }
     
 }
@@ -70,7 +80,7 @@ protocol Meta {
 
 extension Meta {
     static func add(_ object: Meta, id: String? = nil, realm: Realm) {
-        realm.add(RealmFireMeta(data: object.serialized(), type: self.type, id: id ?? ""))
+        //realm.add(RealmFireMeta(data: object.serialized(), type: self.type, id: id ?? ""))
     }
 }
 
@@ -78,6 +88,10 @@ class CollectionMeta: Meta {
     static var type = "realmfire-collectionmeta"
     var meta = RealmFireMeta()
     var metas = [String: [String: Any]]() // [className: [prop: value]]
+    
+    var key = ""
+    var lastFetched = 0.0
+    var className = ""
     
     init(className: String, lastFetched: Double ) {
         self.lastFetched = lastFetched
@@ -115,7 +129,7 @@ class SyncMeta: Meta {
     var id = ""
     var objects = [String: String]() // [key: className]
     
-    required init(data: [String: Any]) {
+    required init(deserializeWith data: [String: Any]) {
         objects = data["objects"] as! [String: String]
     }
     
@@ -126,9 +140,9 @@ class SyncMeta: Meta {
 
 /// A RealmFireMeta's task is to store and retreive any Meta object
 class RealmFireMeta: Object {
-    dynamic var id = "" // Not currently used, but included for potensial future use
-    dynamic var type = ""
-    dynamic var data = Data()
+    @objc dynamic var id = "" // Not currently used, but included for potensial future use
+    @objc dynamic var type = ""
+    @objc dynamic var data = Data()
     
     convenience init(data: [String: Any], type: String = "") {
         self.init()
@@ -148,7 +162,7 @@ class RealmFireMeta: Object {
     
     func obtain<T: Meta>(_ type: T.Type) -> T {
         let dict = NSKeyedUnarchiver.unarchiveObject(with: data)
-        return type.init(data: dict as! [String: Any])
+        return type.init(deserializeWith: dict as! [String: Any])
     }
     
     static func find(withType type: String, realm: Realm) -> RealmFireMeta? {

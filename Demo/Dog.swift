@@ -2,28 +2,28 @@ import Foundation
 import RealmSwift
 
 class Activity: Object {
-    dynamic var name = "Walking"
-    dynamic var date = Date()
+    @objc dynamic var name = "Walking"
+    @objc dynamic var date = Date()
 }
 
 class Dog: SyncObject {
-    dynamic var uid = ""
-    dynamic var name = ""
-    dynamic var awardCount = 0
-    dynamic var isHappy = false
-    dynamic var height: Float = 0
-    dynamic var speed: Double = 0
+    @objc dynamic var uid = ""
+    @objc dynamic var name = ""
+    @objc dynamic var awardCount = 0
+    @objc dynamic var isHappy = false
+    @objc dynamic var height: Float = 0
+    @objc dynamic var speed: Double = 0
     
-    dynamic var birthDate: Date? = nil
-    dynamic var data: Data? = nil
+    @objc dynamic var birthDate: Date? = nil
+    @objc dynamic var data: Data? = nil
     
     let rating = RealmOptional<Int>()
     let weight = RealmOptional<Double>()
     
-    dynamic var owner: Person? = nil
+    @objc dynamic var owner: Person? = nil
     let trainers = List<Person>()
     
-    dynamic var mainActivity: Activity? = nil
+    @objc dynamic var mainActivity: Activity? = nil
     let activities = List<Activity>()
     
     convenience init(debug: Bool) {

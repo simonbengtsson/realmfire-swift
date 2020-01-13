@@ -63,12 +63,20 @@ inline MemRef BasicArray<T>::create_array(Array::Type type, bool context_flag, s
     REALM_ASSERT(!context_flag);
     MemRef mem = create_array(init_size, allocator);
     if (init_size) {
+        // GCC 7.x emits a false-positive strict aliasing warning for this code. Suppress it, since it
+        // clutters up the build output.  See <https://github.com/realm/realm-core/issues/2665> for details.
+        REALM_DIAG_PUSH();
+        REALM_DIAG(ignored "-Wstrict-aliasing");
+
         BasicArray<T> tmp(allocator);
         tmp.init_from_mem(mem);
-        for (size_t i = 0; i < init_size; ++i) {
-            tmp.set(i, value);
+        T* p = reinterpret_cast<T*>(tmp.m_data);
+        T* end = p + init_size;
+        while (p < end) {
+            *p++ = value;
         }
-        return tmp.get_mem();
+
+        REALM_DIAG_POP();
     }
     return mem;
 }
@@ -151,6 +159,8 @@ template <class T>
 inline void BasicArray<T>::set(size_t ndx, T value)
 {
     REALM_ASSERT_3(ndx, <, m_size);
+    if (get(ndx) == value)
+        return;
 
     // Check if we need to copy before modifying
     copy_on_write(); // Throws
@@ -206,7 +216,7 @@ void BasicArray<T>::erase(size_t ndx)
         char* dst_begin = m_data + ndx * m_width;
         const char* src_begin = dst_begin + m_width;
         const char* src_end = m_data + m_size * m_width;
-        std::copy_n(src_begin, src_end - src_begin, dst_begin);
+        realm::safe_copy_n(src_begin, src_end - src_begin, dst_begin);
     }
 
     // Update size (also in header)
@@ -242,7 +252,7 @@ bool BasicArray<T>::compare(const BasicArray<T>& a) const
         return false;
     const T* data_1 = reinterpret_cast<const T*>(m_data);
     const T* data_2 = reinterpret_cast<const T*>(a.m_data);
-    return std::equal(data_1, data_1 + n, data_2);
+    return realm::safe_equal(data_1, data_1 + n, data_2);
 }
 
 
@@ -406,7 +416,7 @@ inline size_t BasicArray<T>::calc_aligned_byte_size(size_t size)
     size_t max = std::numeric_limits<size_t>::max();
     size_t max_2 = max & ~size_t(7); // Allow for upwards 8-byte alignment
     if (size > (max_2 - header_size) / sizeof(T))
-        throw std::runtime_error("Byte size overflow");
+        throw util::overflow_error("Byte size overflow");
     size_t byte_size = header_size + size * sizeof(T);
     REALM_ASSERT_3(byte_size, >, 0);
     size_t aligned_byte_size = ((byte_size - 1) | 7) + 1; // 8-byte alignment

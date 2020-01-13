@@ -60,6 +60,10 @@ public:
     {
     }
 
+    // Disable copying, this is not allowed.
+    ArrayBinary& operator=(const ArrayBinary&) = delete;
+    ArrayBinary(const ArrayBinary&) = delete;
+
     /// Create a new empty binary array and attach this accessor to
     /// it. This does not modify the parent reference information of
     /// this accessor.
@@ -206,10 +210,10 @@ inline void ArrayBinary::truncate(size_t new_size)
 {
     REALM_ASSERT_3(new_size, <, m_offsets.size());
 
-    size_t blob_size = new_size ? to_size_t(m_offsets.get(new_size - 1)) : 0;
+    size_t sz = new_size ? to_size_t(m_offsets.get(new_size - 1)) : 0;
 
     m_offsets.truncate(new_size);
-    m_blob.truncate(blob_size);
+    m_blob.truncate(sz);
     if (!legacy_array_type())
         m_nulls.truncate(new_size);
 }

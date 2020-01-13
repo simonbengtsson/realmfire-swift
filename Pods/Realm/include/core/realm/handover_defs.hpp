@@ -31,7 +31,10 @@ struct RowBaseHandoverPatch;
 struct TableViewHandoverPatch;
 
 struct TableHandoverPatch {
+    bool m_is_sub_table;
     size_t m_table_num;
+    size_t m_col_ndx;
+    size_t m_row_ndx;
 };
 
 struct LinkViewHandoverPatch {
@@ -54,9 +57,21 @@ struct QueryHandoverPatch {
     QueryNodeHandoverPatches m_node_data;
 };
 
-struct SortDescriptorHandoverPatch {
+enum class DescriptorType {
+    Sort,
+    Distinct,
+    Limit
+};
+
+struct DescriptorExport {
+    DescriptorType type;
     std::vector<std::vector<size_t>> columns;
-    std::vector<bool> ascending;
+    std::vector<bool> ordering;
+    size_t limit;
+};
+
+struct DescriptorOrderingHandoverPatch {
+    std::vector<DescriptorExport> descriptors;
 };
 
 struct TableViewHandoverPatch {
@@ -66,8 +81,7 @@ struct TableViewHandoverPatch {
     bool was_in_sync;
     QueryHandoverPatch query_patch;
     std::unique_ptr<LinkViewHandoverPatch> linkview_patch;
-    std::unique_ptr<SortDescriptorHandoverPatch> sort_patch;
-    std::unique_ptr<SortDescriptorHandoverPatch> distinct_patch;
+    std::unique_ptr<DescriptorOrderingHandoverPatch> descriptors_patch;
 };
 
 

@@ -2,10 +2,10 @@ import Foundation
 import RealmSwift
 
 class Person: SyncObject {
-    dynamic var registrationId = ""
-    dynamic var name = ""
-    dynamic var age = 0
-    dynamic var secretMessage = ""
+    @objc dynamic var registrationId = ""
+    @objc dynamic var name = ""
+    @objc dynamic var age = 0
+    @objc dynamic var secretMessage = ""
     let dogs = LinkingObjects(fromType: Dog.self, property: "trainers")
     
     convenience init(debug: Bool) {

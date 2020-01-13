@@ -26,7 +26,7 @@ import Realm
 
  Schemas map to collections of tables in the core database.
  */
-public final class Schema: CustomStringConvertible {
+public struct Schema: CustomStringConvertible {
 
     // MARK: Properties
 
@@ -65,7 +65,7 @@ public final class Schema: CustomStringConvertible {
 
 extension Schema: Equatable {
     /// Returns whether the two schemas are equal.
-    public static func == (lhs: Schema, rhs: Schema) -> Bool { // swiftlint:disable:this valid_docs
+    public static func == (lhs: Schema, rhs: Schema) -> Bool {
         return lhs.rlmSchema.isEqual(to: rhs.rlmSchema)
     }
 }

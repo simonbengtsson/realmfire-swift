@@ -25,10 +25,21 @@
 #include <cstdio>
 #include <algorithm>
 #include <functional>
+#include <time.h>
 
-#ifdef _MSC_VER
+#ifdef _WIN32
+
+#include <WinSock2.h>
 #include <intrin.h>
+#include <BaseTsd.h>
+
+#if !defined(_SSIZE_T_) && !defined(_SSIZE_T_DEFINED)
+typedef SSIZE_T ssize_t;
+#define _SSIZE_T_
+#define _SSIZE_T_DEFINED
 #endif
+
+#endif // _WIN32
 
 #include <realm/util/features.h>
 #include <realm/util/assert.hpp>
@@ -115,6 +126,12 @@ size_t round_up(size_t p, size_t align);
 size_t round_down(size_t p, size_t align);
 void millisleep(unsigned long milliseconds);
 
+#ifdef _WIN32
+int gettimeofday(struct timeval * tp, struct timezone * tzp);
+#endif
+
+int64_t platform_timegm(tm time);
+
 #ifdef REALM_SLAB_ALLOC_TUNE
 void process_mem_usage(double& vm_usage, double& resident_set);
 #endif
@@ -178,12 +195,6 @@ ReturnType type_punning(OriginalType variable) noexcept
 // Also see the comments in Array::index_string()
 enum FindRes {
     // Indicate that no results were found in the search
-    // Do not change this from 0. There are several places in the find method,
-    // (Array::index_string) which can skip a conditional (of the search type)
-    // if and only if FindRes_not_found is the same as returning a value of 0
-    // for when the search method is a count of the value. ie. we can return a
-    // result of 0 regardless of if we are counting the values or if we are
-    // returning a column or a single index; 0 means no results in all cases.
     FindRes_not_found,
     // Indicates a single result is found
     FindRes_single,
@@ -193,7 +204,6 @@ enum FindRes {
 
 enum IndexMethod {
     index_FindFirst,
-    index_FindAll,
     index_FindAll_nocopy,
     index_Count,
 };
@@ -227,19 +237,40 @@ struct is_any<T, U, Ts...> : is_any<T, Ts...> {
 };
 
 
-// Use safe_equal() instead of std::equal() when comparing sequences which can have a 0 elements.
+// Use realm::safe_equal() instead of std::equal() if one of the parameters can be a null pointer.
 template <class InputIterator1, class InputIterator2>
 bool safe_equal(InputIterator1 first1, InputIterator1 last1, InputIterator2 first2)
 {
-#if defined(_MSC_VER) && defined(_DEBUG)
-
-    // Windows has a special check in debug mode against passing realm::null()
-    // pointer to std::equal(). It's uncertain if this is allowed by the C++ standard. For details, see
+#if defined(_MSC_VER)
+    // VS has a special check in debug mode against passing a null pointer std::equal(); it will give a warning
+    // at runtime if this is observed.
+    // It's uncertain if this is allowed by the C++ standard. For details, see
     // http://stackoverflow.com/questions/19120779/is-char-p-0-stdequalp-p-p-well-defined-according-to-the-c-standard.
-    // Below check 'first1==last1' is to prevent failure in debug mode.
-    return (first1 == last1 || std::equal(first1, last1, first2));
+    // So we use a safe C++14 method instead that takes two range pairs.
+    size_t len = last1 - first1;
+    return std::equal(first1, last1, first2, first2 + len);
 #else
     return std::equal(first1, last1, first2);
+#endif
+}
+
+// Use realm::safe_copy_n() instead of std::copy_n() if one of the parameters can be a null pointer. See the
+// explanation of safe_equal() above; same things apply.
+template< class InputIt, class Size, class OutputIt>
+OutputIt safe_copy_n(InputIt first, Size count, OutputIt result)
+{
+#if defined(_MSC_VER)
+    // This loop and the method prototype is copy pasted
+    // from "Possible implementation" on http://en.cppreference.com/w/cpp/algorithm/copy_n
+    if (count > 0) {
+        *result++ = *first;
+        for (Size i = 1; i < count; ++i) {
+            *result++ = *++first;
+        }
+    }
+    return result;
+#else
+    return std::copy_n(first, count, result);
 #endif
 }
 
@@ -268,6 +299,13 @@ struct PlacementDelete {
         v->~T();
     }
 };
+
+#ifdef _WIN32
+typedef void* FileDesc;
+#else
+typedef int FileDesc;
+#endif
+
 
 } // namespace realm
 

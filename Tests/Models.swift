@@ -6,10 +6,10 @@ import Foundation
 import RealmSwift
 
 class TestPerson: SyncObject {
-    dynamic var registrationId = ""
-    dynamic var name = ""
-    dynamic var age = 0
-    dynamic var secretMessage = ""
+    @objc dynamic var registrationId = ""
+    @objc dynamic var name = ""
+    @objc dynamic var age = 0
+    @objc dynamic var secretMessage = ""
     let dogs = LinkingObjects(fromType: TestDog.self, property: "trainers")
     
     convenience init(debug: Bool) {
@@ -57,28 +57,28 @@ class TestPerson: SyncObject {
 
 
 class TestActivity: Object {
-    dynamic var name = "Walking"
-    dynamic var rating = 5
+    @objc dynamic var name = "Walking"
+    @objc dynamic var rating = 5
 }
 
 class TestDog: SyncObject {
-    dynamic var uid = ""
-    dynamic var name = ""
-    dynamic var awardCount = 0
-    dynamic var isHappy = false
-    dynamic var height: Float = 0
-    dynamic var speed: Double = 0
+    @objc dynamic var uid = ""
+    @objc dynamic var name = ""
+    @objc dynamic var awardCount = 0
+    @objc dynamic var isHappy = false
+    @objc dynamic var height: Float = 0
+    @objc dynamic var speed: Double = 0
     
-    dynamic var birthDate: Date? = nil
-    dynamic var data: Data? = nil
+    @objc dynamic var birthDate: Date? = nil
+    @objc dynamic var data: Data? = nil
     
     let rating = RealmOptional<Int>()
     let weight = RealmOptional<Double>()
     
-    dynamic var owner: TestPerson? = nil
+    @objc dynamic var owner: TestPerson? = nil
     let trainers = List<TestPerson>()
     
-    dynamic var mainActivity: TestActivity? = nil
+    @objc dynamic var mainActivity: TestActivity? = nil
     let activities = List<TestActivity>()
     
     convenience init(debug: Bool) {

@@ -62,7 +62,7 @@ class Mapper {
     
     func decode<T: DataObject>(dataObjectValue: Any?, type: T.Type) -> T? {
         let object = type.init()
-        let customAttributes = type(of: object).customAttributes()
+        let customAttributes = Swift.type(of: object).customAttributes()
         let ignored = type.ignoredSyncProperties()
         for prop in object.objectSchema.properties {
             let data = dataObjectValue as! [String: Any]
@@ -198,12 +198,6 @@ class Mapper {
             } else {
                 result = encode(object: value as? Object)
             }
-        case .array:
-            if TypeHandler.isSyncType(className: prop.objectClassName!) {
-                result = encode(syncList: object.dynamicList(prop.name))
-            } else {
-                result = encode(list: object.dynamicList(prop.name))
-            }
         case .any, .linkingObjects:
             fatalError("Not supported property type. Create an issue on github if you get this error.")
         }
@@ -231,15 +225,6 @@ class Mapper {
                 return decode(dataObjectValue: value, type: type)
             } else {
                 return decode(objectValue: value, className: prop.objectClassName!)
-            }
-        case .array:
-            let type = TypeHandler.getType(className: prop.objectClassName!)
-            if let type = type as? SyncObject.Type {
-                return decode(syncListValue: value, type: type)
-            } else if let type = type {
-                return decode(listValue: value, className: type.className())
-            } else {
-                return decode(listValue: value, className: prop.objectClassName!)
             }
         case .any, .linkingObjects:
             fatalError("Not supported property type. Create an issue on github if you get this error.")

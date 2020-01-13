@@ -29,9 +29,9 @@
 #include <realm/exceptions.hpp>
 #include <realm/impl/input_stream.hpp>
 #include <realm/impl/output_stream.hpp>
-#include <realm/impl/continuous_transactions_history.hpp>
+#include <realm/impl/cont_transact_hist.hpp>
+#include <realm/metrics/metrics.hpp>
 #include <realm/table.hpp>
-#include <realm/table_basic_fwd.hpp>
 #include <realm/alloc_slab.hpp>
 
 namespace realm {
@@ -103,6 +103,7 @@ public:
 
     // FIXME: Implement a proper copy constructor (fairly trivial).
     Group(const Group&) = delete;
+    Group& operator=(const Group&) = delete;
 
     ~Group() noexcept override;
 
@@ -138,6 +139,15 @@ public:
     /// the database to a new file does not end, or in any other way
     /// change the association between the Group instance and the file
     /// that was specified in the call to open().
+    ///
+    /// A Realm file that contains a history (see Replication::HistoryType) may
+    /// be opened via Group::open(), as long as the application can ensure that
+    /// there is no concurrent access to the file (see below for more on
+    /// concurrency), but if the file is modified via Group::commit() the
+    /// history will be discarded. To retain the history, the application must
+    /// instead access the file in shared mode, i.e., via SharedGroup, and
+    /// supply the right kind of replication plugin (see
+    /// Replication::get_history_type()).
     ///
     /// A file that is passed to Group::open(), may not be modified by
     /// a third party until after the Group object is
@@ -277,8 +287,6 @@ public:
     /// the dynamic type (descriptor) to match the statically specified custom
     /// table type.
     ///
-    /// \tparam T An instance of the BasicTable class template.
-    ///
     /// \param index Index of table in this group.
     ///
     /// \param name Name of table. All strings are valid table names as long as
@@ -335,30 +343,6 @@ public:
     TableRef get_or_add_table(StringData name, bool* was_added = nullptr);
     TableRef get_or_insert_table(size_t index, StringData name, bool* was_added = nullptr);
 
-    template <class T>
-    BasicTableRef<T> get_table(size_t index);
-
-    template <class T>
-    BasicTableRef<const T> get_table(size_t index) const;
-
-    template <class T>
-    BasicTableRef<T> get_table(StringData name);
-
-    template <class T>
-    BasicTableRef<const T> get_table(StringData name) const;
-
-    template <class T>
-    BasicTableRef<T> add_table(StringData name, bool require_unique_name = true);
-
-    template <class T>
-    BasicTableRef<T> insert_table(size_t index, StringData name, bool require_unique_name = true);
-
-    template <class T>
-    BasicTableRef<T> get_or_add_table(StringData name, bool* was_added = nullptr);
-
-    template <class T>
-    BasicTableRef<T> get_or_insert_table(size_t index, StringData name, bool* was_added = nullptr);
-
     void remove_table(size_t index);
     void remove_table(StringData name);
 
@@ -366,17 +350,6 @@ public:
     void rename_table(StringData name, StringData new_name, bool require_unique_name = true);
 
     //@}
-
-    /// Move the table at \a from_index such that it ends up at \a
-    /// to_index. Other tables are shifted as necessary in such a way that their
-    /// order is preserved.
-    ///
-    /// Note that \a to_index is the desired final index of the moved table,
-    /// therefore, `move_table(1,1)` is a no-op, while `move_table(1,2)` moves
-    /// the table at index 1 by one position, such that it ends up at index 2. A
-    /// side-effect of that, is that the table, that was originally at index 2,
-    /// is moved to index 1.
-    void move_table(size_t from_index, size_t to_index);
 
     // Serialization
 
@@ -398,12 +371,16 @@ public:
     /// \param encryption_key 32-byte key used to encrypt the database file,
     /// or nullptr to disable encryption.
     ///
+    /// \param version If different from 0, the new file will be a full fledged
+    /// realm file with free list and history info. The version of the commit
+    /// will be set to the value given here.
+    ///
     /// \throw util::File::AccessError If the file could not be
     /// opened. If the reason corresponds to one of the exception
     /// types that are derived from util::File::AccessError, the
     /// derived exception type is thrown. In particular,
     /// util::File::Exists will be thrown if the file exists already.
-    void write(const std::string& file, const char* encryption_key = nullptr) const;
+    void write(const std::string& file, const char* encryption_key = nullptr, uint64_t version = 0) const;
 
     /// Write this database to a memory buffer.
     ///
@@ -536,11 +513,33 @@ public:
         return !(*this == g);
     }
 
+    /// Control of what to include when computing memory usage
+    enum SizeAggregateControl {
+        size_of_state = 1, ///< size of tables, indexes, toplevel array
+        size_of_history = 2, ///< size of the in-file history compartment
+        size_of_freelists = 4, ///< size of the freelists
+        size_of_all = 7
+    };
+    /// Compute the sum of the sizes in number of bytes of all the array nodes
+    /// that currently make up this group. When this group represents a snapshot
+    /// in a Realm file (such as during a read transaction via a SharedGroup
+    /// instance), this function computes the footprint of that snapshot within
+    /// the Realm file.
+    ///
+    /// If this group accessor is the detached state, this function returns
+    /// zero.
+    size_t compute_aggregated_byte_size(SizeAggregateControl ctrl = SizeAggregateControl::size_of_all) const noexcept;
+    /// Return the size taken up by the current snapshot. This is in contrast to
+    /// the number returned by SharedGroup::get_stats() which will return the
+    /// size of the last snapshot done in that SharedGroup. If the snapshots are
+    /// identical, the numbers will of course be equal.
+    size_t get_used_space() const noexcept;
+
     void verify() const;
 #ifdef REALM_DEBUG
     void print() const;
     void print_free() const;
-    MemStats stats();
+    MemStats get_stats();
     void enable_mem_diagnostics(bool enable = true)
     {
         m_alloc.enable_debug(enable);
@@ -553,41 +552,46 @@ public:
 private:
     SlabAlloc m_alloc;
 
+    int m_file_format_version;
     /// `m_top` is the root node (or top array) of the Realm, and has the
     /// following layout:
     ///
     /// <pre>
     ///
-    ///   slot  value
-    ///   -----------------------
-    ///   1st   m_table_names
-    ///   2nd   m_tables
-    ///   3rd   Logical file size
-    ///   4th   GroupWriter::m_free_positions (optional)
-    ///   5th   GroupWriter::m_free_lengths   (optional)
-    ///   6th   GroupWriter::m_free_versions  (optional)
-    ///   7th   Transaction number / version  (optional)
-    ///   8th   In-Realm history type         (optional)
-    ///   9th   In-Realm history ref          (optional)
+    ///                                                     Introduced in file
+    ///   Slot  Value                                       format version
+    ///   ---------------------------------------------------------------------
+    ///    1st   m_table_names
+    ///    2nd   m_tables
+    ///    3rd   Logical file size
+    ///    4th   GroupWriter::m_free_positions (optional)
+    ///    5th   GroupWriter::m_free_lengths   (optional)
+    ///    6th   GroupWriter::m_free_versions  (optional)
+    ///    7th   Transaction number / version  (optional)
+    ///    8th   History type         (optional)             4
+    ///    9th   History ref          (optional)             4
+    ///   10th   History version      (optional)             7
     ///
     /// </pre>
     ///
-    /// The 'in-Realm history type' slot stores a value of
-    /// Replication::HistoryType, although never
-    /// Replication::hist_OutOfRealm. For more information about that, see
-    /// Replication::get_history_type().
+    /// The 'History type' slot stores a value of type
+    /// Replication::HistoryType. The 'History version' slot stores a history
+    /// schema version as returned by Replication::get_history_schema_version().
     ///
     /// The first three entries are mandatory. In files created by
     /// Group::write(), none of the optional entries are present and the size of
     /// `m_top` is 3. In files updated by Group::commit(), the 4th and 5th entry
-    /// is present, and the size of `m_top` is 5. In files updated by way of a
-    /// transaction (SharedGroup::commit()), the 4th, 5th, 6th, and 7th entry is
-    /// present, and the size of `m_top` is 7. In files that contain a changeset
-    /// history, the 8th and 9th entry is present.
+    /// are present, and the size of `m_top` is 5. In files updated by way of a
+    /// transaction (SharedGroup::commit()), the 4th, 5th, 6th, and 7th entry
+    /// are present, and the size of `m_top` is 7. In files that contain a
+    /// changeset history, the 8th, 9th, and 10th entry are present, except that
+    /// if the file was opened in nonshared mode (via Group::open()), and the
+    /// file format remains at 6 (not previously upgraded to 7 or later), then
+    /// the 10th entry will be absent.
     ///
     /// When a group accessor is attached to a newly created file or an empty
     /// memory buffer where there is no top array yet, `m_top`, `m_tables`, and
-    /// `m_table_names` with be left in the detached state until the initiation
+    /// `m_table_names` will be left in the detached state until the initiation
     /// of the first write transaction. In particular, they will remain in the
     /// detached state during read transactions that precede the first write
     /// transaction.
@@ -603,12 +607,16 @@ private:
 
     std::function<void(const CascadeNotification&)> m_notify_handler;
     std::function<void()> m_schema_change_handler;
+    std::shared_ptr<metrics::Metrics> m_metrics;
+    size_t m_total_rows;
 
     struct shared_tag {
     };
     Group(shared_tag) noexcept;
 
     void init_array_parents() noexcept;
+
+    void open(ref_type top_ref, const std::string& file_path);
 
     /// If `top_ref` is not zero, attach this group accessor to the specified
     /// underlying node structure. If `top_ref` is zero and \a
@@ -655,13 +663,17 @@ private:
     void child_accessor_destroyed(Table*) noexcept override;
 
     // Overriding method in Table::Parent
+    std::recursive_mutex* get_accessor_management_lock() noexcept override
+    { return nullptr; } // we don't need locking for group!
+
+    // Overriding method in Table::Parent
     Group* get_parent_group() noexcept override;
 
     class TableWriter;
     class DefaultTableWriter;
 
-    static void write(std::ostream&, const Allocator&, TableWriter&, bool no_top_array, bool pad_for_encryption,
-                      uint_fast64_t version_number);
+    static void write(std::ostream&, int file_format_version, TableWriter&, bool no_top_array,
+                      bool pad_for_encryption, uint_fast64_t version_number);
 
     typedef void (*DescSetter)(Table&);
     typedef bool (*DescMatcher)(const Spec&);
@@ -683,17 +695,84 @@ private:
 
     void mark_all_table_accessors() noexcept;
 
-    void write(const std::string& file, const char* encryption_key, uint_fast64_t version_number) const;
     void write(util::File& file, const char* encryption_key, uint_fast64_t version_number) const;
     void write(std::ostream&, bool pad, uint_fast64_t version_numer) const;
 
     Replication* get_replication() const noexcept;
     void set_replication(Replication*) noexcept;
+    std::shared_ptr<metrics::Metrics> get_metrics() const noexcept;
+    void set_metrics(std::shared_ptr<metrics::Metrics> other) noexcept;
+    void update_num_objects();
     class TransactAdvancer;
     void advance_transact(ref_type new_top_ref, size_t new_file_size, _impl::NoCopyInputStream&);
     void refresh_dirty_accessors();
     template <class F>
     void update_table_indices(F&& map_function);
+
+    /// \brief The version of the format of the node structure (in file or in
+    /// memory) in use by Realm objects associated with this group.
+    ///
+    /// Every group contains a file format version field, which is returned
+    /// by this function. The file format version field is set to the file format
+    /// version specified by the attached file (or attached memory buffer) at the
+    /// time of attachment and the value is used to determine if a file format
+    /// upgrade is required.
+    ///
+    /// A value of zero means that the file format is not yet decided. This is
+    /// only possible for empty Realms where top-ref is zero. (When group is created
+    /// with the unattached_tag). The version number will then be determined in the
+    /// subsequent call to Group::open.
+    ///
+    /// In shared mode (when a Realm file is opened via a SharedGroup instance)
+    /// it can happen that the file format is upgraded asyncronously (via
+    /// another SharedGroup instance), and in that case the file format version
+    /// field can get out of date, but only for a short while. It is always
+    /// guaranteed to be, and remain up to date after the opening process completes
+    /// (when SharedGroup::do_open() returns).
+    ///
+    /// An empty Realm file (one whose top-ref is zero) may specify a file
+    /// format version of zero to indicate that the format is not yet
+    /// decided. In that case the file format version must be changed to a proper
+    /// before the opening process completes (Group::open() or SharedGroup::open()).
+    ///
+    /// File format versions:
+    ///
+    ///   1 Initial file format version
+    ///
+    ///   2 Various changes.
+    ///
+    ///   3 Supporting null on string columns broke the file format in following
+    ///     way: Index appends an 'X' character to all strings except the null
+    ///     string, to be able to distinguish between null and empty
+    ///     string. Bumped to 3 because of null support of String columns and
+    ///     because of new format of index.
+    ///
+    ///   4 Introduction of optional in-Realm history of changes (additional
+    ///     entries in Group::m_top). Since this change is not forward
+    ///     compatible, the file format version had to be bumped. This change is
+    ///     implemented in a way that achieves backwards compatibility with
+    ///     version 3 (and in turn with version 2).
+    ///
+    ///   5 Introduced the new Timestamp column type that replaces DateTime.
+    ///     When opening an older database file, all DateTime columns will be
+    ///     automatically upgraded Timestamp columns.
+    ///
+    ///   6 Introduced a new structure for the StringIndex. Moved the commit
+    ///     logs into the Realm file. Changes to the transaction log format
+    ///     including reshuffling instructions. This is the format used in
+    ///     milestone 2.0.0.
+    ///
+    ///   7 Introduced "history schema version" as 10th entry in top array.
+    ///
+    ///   8 Subtables can now have search index.
+    ///
+    ///   9 Replication instruction values shuffled, instr_MoveRow added.
+    ///
+    /// IMPORTANT: When introducing a new file format version, be sure to review
+    /// the file validity checks in Group::open() and SharedGroup::do_open, the file
+    /// format selection logic in
+    /// Group::get_target_file_format_version_for_session(), and the file format
+    /// upgrade logic in Group::upgrade_file_format().
 
     int get_file_format_version() const noexcept;
     void set_file_format_version(int) noexcept;
@@ -710,11 +789,14 @@ private:
     void send_cascade_notification(const CascadeNotification& notification) const;
     void send_schema_change_notification() const;
 
-    static void get_version_and_history_type(const Array& top, _impl::History::version_type& version,
-                                             int& history_type) noexcept;
+    static void get_version_and_history_info(const Array& top, _impl::History::version_type& version,
+                                             int& history_type, int& history_schema_version) noexcept;
     static ref_type get_history_ref(const Array& top) noexcept;
+    static int get_history_schema_version(const Array& top) noexcept;
+    void set_history_schema_version(int version);
     void set_history_parent(Array& history_root) noexcept;
-    void prepare_history_parent(Array& history_root, int history_type);
+    void prepare_history_parent(Array& history_root, int history_type, int history_schema_version);
+    static void validate_top_array(const Array& arr, const SlabAlloc& alloc);
 
     friend class Table;
     friend class GroupWriter;
@@ -724,6 +806,8 @@ private:
     friend class _impl::TransactLogParser;
     friend class Replication;
     friend class TrivialReplication;
+    friend class metrics::QueryInfo;
+    friend class metrics::Metrics;
 };
 
 
@@ -735,6 +819,7 @@ inline Group::Group(const std::string& file, const char* key, OpenMode mode)
     , m_tables(m_alloc)
     , m_table_names(m_alloc)
     , m_is_shared(false)
+    , m_total_rows(0)
 {
     init_array_parents();
 
@@ -747,6 +832,7 @@ inline Group::Group(BinaryData buffer, bool take_ownership)
     , m_tables(m_alloc)
     , m_table_names(m_alloc)
     , m_is_shared(false)
+    , m_total_rows(0)
 {
     init_array_parents();
     open(buffer, take_ownership); // Throws
@@ -759,6 +845,7 @@ inline Group::Group(unattached_tag) noexcept
     , m_tables(m_alloc)
     , m_table_names(m_alloc)
     , m_is_shared(false)
+    , m_total_rows(0)
 {
     init_array_parents();
 }
@@ -775,6 +862,7 @@ inline Group::Group(shared_tag) noexcept
     , m_tables(m_alloc)
     , m_table_names(m_alloc)
     , m_is_shared(true)
+    , m_total_rows(0)
 {
     init_array_parents();
 }
@@ -894,91 +982,6 @@ inline TableRef Group::get_or_add_table(StringData name, bool* was_added)
     return TableRef(table);
 }
 
-template <class T>
-inline BasicTableRef<T> Group::get_table(size_t table_ndx)
-{
-    static_assert(IsBasicTable<T>::value, "Invalid table type");
-    if (!is_attached())
-        throw LogicError(LogicError::detached_accessor);
-    DescMatcher desc_matcher = &T::matches_dynamic_type;
-    Table* table = do_get_table(table_ndx, desc_matcher); // Throws
-    return BasicTableRef<T>(static_cast<T*>(table));
-}
-
-template <class T>
-inline BasicTableRef<const T> Group::get_table(size_t table_ndx) const
-{
-    static_assert(IsBasicTable<T>::value, "Invalid table type");
-    if (!is_attached())
-        throw LogicError(LogicError::detached_accessor);
-    DescMatcher desc_matcher = &T::matches_dynamic_type;
-    const Table* table = do_get_table(table_ndx, desc_matcher); // Throws
-    return BasicTableRef<const T>(static_cast<const T*>(table));
-}
-
-template <class T>
-inline BasicTableRef<T> Group::get_table(StringData name)
-{
-    static_assert(IsBasicTable<T>::value, "Invalid table type");
-    if (!is_attached())
-        throw LogicError(LogicError::detached_accessor);
-    DescMatcher desc_matcher = &T::matches_dynamic_type;
-    Table* table = do_get_table(name, desc_matcher); // Throws
-    return BasicTableRef<T>(static_cast<T*>(table));
-}
-
-template <class T>
-inline BasicTableRef<const T> Group::get_table(StringData name) const
-{
-    static_assert(IsBasicTable<T>::value, "Invalid table type");
-    if (!is_attached())
-        throw LogicError(LogicError::detached_accessor);
-    DescMatcher desc_matcher = &T::matches_dynamic_type;
-    const Table* table = do_get_table(name, desc_matcher); // Throws
-    return BasicTableRef<const T>(static_cast<const T*>(table));
-}
-
-template <class T>
-inline BasicTableRef<T> Group::insert_table(size_t table_ndx, StringData name, bool require_unique_name)
-{
-    static_assert(IsBasicTable<T>::value, "Invalid table type");
-    if (!is_attached())
-        throw LogicError(LogicError::detached_accessor);
-    DescSetter desc_setter = &T::set_dynamic_type;
-    Table* table = do_insert_table(table_ndx, name, desc_setter, require_unique_name); // Throws
-    return BasicTableRef<T>(static_cast<T*>(table));
-}
-
-template <class T>
-inline BasicTableRef<T> Group::add_table(StringData name, bool require_unique_name)
-{
-    return insert_table<T>(size(), name, require_unique_name);
-}
-
-template <class T>
-BasicTableRef<T> Group::get_or_insert_table(size_t table_ndx, StringData name, bool* was_added)
-{
-    static_assert(IsBasicTable<T>::value, "Invalid table type");
-    if (!is_attached())
-        throw LogicError(LogicError::detached_accessor);
-    DescMatcher desc_matcher = &T::matches_dynamic_type;
-    DescSetter desc_setter = &T::set_dynamic_type;
-    Table* table = do_get_or_insert_table(table_ndx, name, desc_matcher, desc_setter, was_added); // Throws
-    return BasicTableRef<T>(static_cast<T*>(table));
-}
-
-template <class T>
-BasicTableRef<T> Group::get_or_add_table(StringData name, bool* was_added)
-{
-    static_assert(IsBasicTable<T>::value, "Invalid table type");
-    if (!is_attached())
-        throw LogicError(LogicError::detached_accessor);
-    DescMatcher desc_matcher = &T::matches_dynamic_type;
-    DescSetter desc_setter = &T::set_dynamic_type;
-    Table* table = do_get_or_add_table(name, desc_matcher, desc_setter, was_added); // Throws
-    return BasicTableRef<T>(static_cast<T*>(table));
-}
-
 template <class S>
 void Group::to_json(S& out, size_t link_depth, std::map<std::string, std::string>* renames) const
 {
@@ -1067,19 +1070,24 @@ inline void Group::send_schema_change_notification() const
         m_schema_change_handler();
 }
 
-inline void Group::get_version_and_history_type(const Array& top, _impl::History::version_type& version,
-                                                int& history_type) noexcept
+inline void Group::get_version_and_history_info(const Array& top, _impl::History::version_type& version,
+                                                int& history_type, int& history_schema_version) noexcept
 {
-    _impl::History::version_type version_2 = 0;
+    using version_type = _impl::History::version_type;
+    version_type version_2 = 0;
     int history_type_2 = 0;
+    int history_schema_version_2 = 0;
     if (top.is_attached()) {
         if (top.size() >= 6) {
             REALM_ASSERT(top.size() >= 7);
-            version_2 = _impl::History::version_type(top.get(6) / 2);
+            version_2 = version_type(top.get_as_ref_or_tagged(6).get_as_int());
         }
         if (top.size() >= 8) {
             REALM_ASSERT(top.size() >= 9);
-            history_type_2 = int(top.get(7) / 2);
+            history_type_2           = int(top.get_as_ref_or_tagged(7).get_as_int());
+        }
+        if (top.size() >= 10) {
+            history_schema_version_2 = int(top.get_as_ref_or_tagged(9).get_as_int());
         }
     }
     // Version 0 is not a legal initial version, so it has to be set to 1
@@ -1088,17 +1096,36 @@ inline void Group::get_version_and_history_type(const Array& top, _impl::History
         version_2 = 1;
     version = version_2;
     history_type = history_type_2;
+    history_schema_version = history_schema_version_2;
 }
 
 inline ref_type Group::get_history_ref(const Array& top) noexcept
 {
-    if (top.is_attached()) {
-        if (top.size() >= 8) {
-            REALM_ASSERT(top.size() >= 9);
-            return top.get_as_ref(8);
-        }
+    bool has_history = (top.is_attached() && top.size() >= 8);
+    if (has_history) {
+        // This function is only used is shared mode (from SharedGroup)
+        REALM_ASSERT(top.size() >= 10);
+        return top.get_as_ref(8);
     }
     return 0;
+}
+
+inline int Group::get_history_schema_version(const Array& top) noexcept
+{
+    bool has_history = (top.is_attached() && top.size() >= 8);
+    if (has_history) {
+        // This function is only used is shared mode (from SharedGroup)
+        REALM_ASSERT(top.size() >= 10);
+        return int(top.get_as_ref_or_tagged(9).get_as_int());
+    }
+    return 0;
+}
+
+inline void Group::set_history_schema_version(int version)
+{
+    // This function is only used is shared mode (from SharedGroup)
+    REALM_ASSERT(m_top.size() >= 10);
+    m_top.set(9, RefOrTagged::make_tagged(unsigned(version))); // Throws
 }
 
 inline void Group::set_history_parent(Array& history_root) noexcept
@@ -1106,21 +1133,17 @@ inline void Group::set_history_parent(Array& history_root) noexcept
     history_root.set_parent(&m_top, 8);
 }
 
-inline void Group::prepare_history_parent(Array& history_root, int history_type)
-{
-    REALM_ASSERT(m_alloc.get_file_format_version() >= 4);
-    // Ensure that there are slots for both the history type and the history
-    // ref.
-    while (m_top.size() < 9)
-        m_top.add(0);                                     // Throws
-    m_top.set(7, RefOrTagged::make_tagged(history_type)); // Throws
-    set_history_parent(history_root);
-}
-
 class Group::TableWriter {
 public:
+    struct HistoryInfo {
+        ref_type ref = 0;
+        int type = 0;
+        int version = 0;
+    };
+
     virtual ref_type write_names(_impl::OutputStream&) = 0;
     virtual ref_type write_tables(_impl::OutputStream&) = 0;
+    virtual HistoryInfo write_history(_impl::OutputStream&) = 0;
     virtual ~TableWriter() noexcept
     {
     }
@@ -1151,6 +1174,16 @@ inline void Group::set_replication(Replication* repl) noexcept
     m_alloc.set_replication(repl);
 }
 
+inline std::shared_ptr<metrics::Metrics> Group::get_metrics() const noexcept
+{
+    return m_metrics;
+}
+
+inline void Group::set_metrics(std::shared_ptr<metrics::Metrics> shared) noexcept
+{
+    m_metrics = shared;
+}
+
 // The purpose of this class is to give internal access to some, but
 // not all of the non-public parts of the Group class.
 class _impl::GroupFriend {
@@ -1158,6 +1191,16 @@ public:
     static Allocator& get_alloc(Group& group) noexcept
     {
         return group.m_alloc;
+    }
+
+    static const Allocator& get_alloc(const Group& group) noexcept
+    {
+        return group.m_alloc;
+    }
+
+    static ref_type get_top_ref(const Group& group) noexcept
+    {
+        return group.m_top.get_ref();
     }
 
     static Table& get_table(Group& group, size_t ndx_in_group)
@@ -1265,13 +1308,15 @@ public:
             group.create_empty_group(); // Throws
     }
 
-    static void get_version_and_history_type(Allocator& alloc, ref_type top_ref,
-                                             _impl::History::version_type& version, int& history_type) noexcept
+    static void get_version_and_history_info(const Allocator& alloc, ref_type top_ref,
+                                             _impl::History::version_type& version,
+                                             int& history_type,
+                                             int& history_schema_version) noexcept
     {
-        Array top(alloc);
+        Array top{const_cast<Allocator&>(alloc)};
         if (top_ref != 0)
             top.init_from_ref(top_ref);
-        Group::get_version_and_history_type(top, version, history_type);
+        Group::get_version_and_history_info(top, version, history_type, history_schema_version);
     }
 
     static ref_type get_history_ref(const Group& group) noexcept
@@ -1287,14 +1332,33 @@ public:
         return Group::get_history_ref(top);
     }
 
+    static int get_history_schema_version(const Group& group) noexcept
+    {
+        return Group::get_history_schema_version(group.m_top);
+    }
+
+    static int get_history_schema_version(Allocator& alloc, ref_type top_ref) noexcept
+    {
+        Array top{alloc};
+        if (top_ref != 0)
+            top.init_from_ref(top_ref);
+        return Group::get_history_schema_version(top);
+    }
+
+    static void set_history_schema_version(Group& group, int version)
+    {
+        group.set_history_schema_version(version); // Throws
+    }
+
     static void set_history_parent(Group& group, Array& history_root) noexcept
     {
         group.set_history_parent(history_root);
     }
 
-    static void prepare_history_parent(Group& group, Array& history_root, int history_type)
+    static void prepare_history_parent(Group& group, Array& history_root, int history_type,
+                                       int history_schema_version)
     {
-        group.prepare_history_parent(history_root, history_type); // Throws
+        group.prepare_history_parent(history_root, history_type, history_schema_version); // Throws
     }
 
     static int get_file_format_version(const Group& group) noexcept
@@ -1349,6 +1413,9 @@ struct CascadeState : Group::CascadeNotification {
     /// If false, the links field is not needed, so any work done just for that
     /// can be skipped.
     bool track_link_nullifications = false;
+
+    /// If false, weak links are followed too
+    bool only_strong_links = true;
 };
 
 inline bool Group::CascadeNotification::row::operator==(const row& r) const noexcept

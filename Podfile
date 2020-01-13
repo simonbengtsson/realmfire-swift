@@ -1,7 +1,7 @@
 target 'RealmFireDemo' do
   use_frameworks!
   
-  pod 'RealmSwift'
+  pod 'RealmSwift', '3.14.0'
   pod 'Firebase'
   pod 'Firebase/Database'
 

@@ -86,13 +86,10 @@ AggregateState      State of the aggregate - contains a state variable that stor
 
 #include <algorithm>
 #include <functional>
+#include <sstream>
 #include <string>
 #include <array>
 
-#include <realm/util/meta.hpp>
-#include <realm/util/miscellaneous.hpp>
-#include <realm/util/shared_ptr.hpp>
-#include <realm/utilities.hpp>
 #include <realm/array_basic.hpp>
 #include <realm/array_string.hpp>
 #include <realm/column_binary.hpp>
@@ -106,16 +103,21 @@ AggregateState      State of the aggregate - contains a state variable that stor
 #include <realm/column_timestamp.hpp>
 #include <realm/column_type_traits.hpp>
 #include <realm/column_type_traits.hpp>
+#include <realm/impl/sequential_getter.hpp>
 #include <realm/link_view.hpp>
+#include <realm/metrics/query_info.hpp>
 #include <realm/query_conditions.hpp>
-#include <realm/query_expression.hpp>
+#include <realm/query_operators.hpp>
 #include <realm/table.hpp>
-#include <realm/table_view.hpp>
 #include <realm/unicode.hpp>
+#include <realm/util/miscellaneous.hpp>
+#include <realm/util/serializer.hpp>
+#include <realm/util/shared_ptr.hpp>
+#include <realm/utilities.hpp>
 
 #include <map>
 
-#if defined(_MSC_FULL_VER) && _MSC_FULL_VER >= 160040219
+#if REALM_X86_OR_X64_TRUE && defined(_MSC_FULL_VER) && _MSC_FULL_VER >= 160040219
 #include <immintrin.h>
 #endif
 
@@ -137,7 +139,6 @@ const size_t probe_matches = 4;
 const size_t bitwidth_time_unit = 64;
 
 typedef bool (*CallbackDummy)(int64_t);
-
 
 class ParentNode {
     typedef ParentNode ThisType;
@@ -170,8 +171,12 @@ public:
 
     virtual void init()
     {
+        // Verify that the cached column accessor is still valid
+        verify_column(); // throws
+
         if (m_child)
             m_child->init();
+
         m_column_action_specializer = nullptr;
     }
 
@@ -261,6 +266,28 @@ public:
             m_child->apply_handover_patch(patches, group);
     }
 
+    virtual void verify_column() const = 0;
+
+    virtual std::string describe(util::serializer::SerialisationState&) const
+    {
+        return "";
+    }
+
+    virtual std::string describe_condition() const
+    {
+        return "matches";
+    }
+
+    virtual std::string describe_expression(util::serializer::SerialisationState& state) const
+    {
+        std::string s;
+        s = describe(state);
+        if (m_child) {
+            s = s + " and " + m_child->describe_expression(state);
+        }
+        return s;
+    }
+
     std::unique_ptr<ParentNode> m_child;
     std::vector<ParentNode*> m_children;
     size_t m_condition_column_idx = npos; // Column of search criteria
@@ -308,13 +335,21 @@ protected:
         }
     }
 
+    void do_verify_column(const ColumnBase* col, size_t col_ndx = npos) const
+    {
+        if (col_ndx == npos)
+            col_ndx = m_condition_column_idx;
+        if (m_table && col_ndx != npos) {
+            m_table->verify_column(col_ndx, col);
+        }
+    }
+
 private:
     virtual void table_changed() = 0;
 };
 
 // For conditions on a subtable (encapsulated in subtable()...end_subtable()). These return the parent row as match if
-// and
-// only if one or more subtable rows match the condition.
+// and only if one or more subtable rows match the condition.
 class SubtableNode : public ParentNode {
 public:
     SubtableNode(size_t column, std::unique_ptr<ParentNode> condition)
@@ -326,6 +361,8 @@ public:
 
     void init() override
     {
+        ParentNode::init();
+
         m_dD = 10.0;
 
         // m_condition is first node in condition of subtable query.
@@ -335,10 +372,6 @@ public:
             std::vector<ParentNode*> v;
             m_condition->gather_children(v);
         }
-
-        // m_child is next node of parent query
-        if (m_child)
-            m_child->init();
     }
 
     void table_changed() override
@@ -351,6 +384,12 @@ public:
             m_column = &m_table->get_column_mixed(m_condition_column_idx);
     }
 
+    void verify_column() const override
+    {
+        if (m_table)
+            m_table->verify_column(m_condition_column_idx, m_column);
+    }
+
     std::string validate() override
     {
         if (error_code != "")
@@ -361,17 +400,23 @@ public:
             return m_condition->validate();
     }
 
+    std::string describe(util::serializer::SerialisationState&) const override
+    {
+        throw SerialisationError("Serialising a query which contains a subtable expression is currently unsupported.");
+    }
+
+
     size_t find_first_local(size_t start, size_t end) override
     {
         REALM_ASSERT(m_table);
         REALM_ASSERT(m_condition);
 
         for (size_t s = start; s < end; ++s) {
-            const Table* subtable;
+            ConstTableRef subtable; // TBD: optimize this back to Table*
             if (m_col_type == col_type_Table)
-                subtable = static_cast<const SubtableColumn*>(m_column)->get_subtable_ptr(s);
+                subtable = static_cast<const SubtableColumn*>(m_column)->get_subtable_tableref(s);
             else {
-                subtable = static_cast<const MixedColumn*>(m_column)->get_subtable_ptr(s);
+                subtable = static_cast<const MixedColumn*>(m_column)->get_subtable_tableref(s);
                 if (!subtable)
                     continue;
             }
@@ -615,6 +660,11 @@ protected:
         m_condition_column = &get_column<ColType>(m_condition_column_idx);
     }
 
+    void verify_column() const override
+    {
+        do_verify_column(m_condition_column);
+    }
+
     void init() override
     {
         ColumnNodeBase::init();
@@ -626,9 +676,6 @@ protected:
         m_leaf_end = 0;
         m_array_ptr.reset(); // Explicitly destroy the old one first, because we're reusing the memory.
         m_array_ptr.reset(new (&m_leaf_cache_storage) LeafType(m_table->get_alloc()));
-
-        if (m_child)
-            m_child->init();
     }
 
     void get_leaf(const ColType& col, size_t ndx)
@@ -677,6 +724,7 @@ protected:
     TFind_callback_specialized m_find_callback_specialized = nullptr;
 };
 
+
 // FIXME: Add specialization that uses index for TConditionFunction = Equal
 template <class ColType, class TConditionFunction>
 class IntegerNode : public IntegerNodeBase<ColType> {
@@ -696,11 +744,11 @@ public:
     {
     }
 
-    void aggregate_local_prepare(Action action, DataType col_id, bool nullable) override
+    void aggregate_local_prepare(Action action, DataType col_id, bool is_nullable) override
     {
         this->m_fastmode_disabled = (col_id == type_Float || col_id == type_Double);
         this->m_action = action;
-        this->m_find_callback_specialized = get_specialized_callback(action, col_id, nullable);
+        this->m_find_callback_specialized = get_specialized_callback(action, col_id, is_nullable);
     }
 
     size_t aggregate_local(QueryStateBase* st, size_t start, size_t end, size_t local_limit,
@@ -746,6 +794,17 @@ public:
         return not_found;
     }
 
+    virtual std::string describe(util::serializer::SerialisationState& state) const override
+    {
+        return state.describe_column(ParentNode::m_table, IntegerNodeBase<ColType>::m_condition_column->get_column_index())
+            + " " + describe_condition() + " " + util::serializer::print_value(IntegerNodeBase<ColType>::m_value);
+    }
+
+    virtual std::string describe_condition() const override
+    {
+        return TConditionFunction::description();
+    }
+
     std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
     {
         return std::unique_ptr<ParentNode>(new IntegerNode<ColType, TConditionFunction>(*this, patches));
@@ -754,21 +813,21 @@ public:
 protected:
     using TFind_callback_specialized = typename BaseType::TFind_callback_specialized;
 
-    static TFind_callback_specialized get_specialized_callback(Action action, DataType col_id, bool nullable)
+    static TFind_callback_specialized get_specialized_callback(Action action, DataType col_id, bool is_nullable)
     {
         switch (action) {
             case act_Count:
-                return get_specialized_callback_2_int<act_Count>(col_id, nullable);
+                return get_specialized_callback_2_int<act_Count>(col_id, is_nullable);
             case act_Sum:
-                return get_specialized_callback_2<act_Sum>(col_id, nullable);
+                return get_specialized_callback_2<act_Sum>(col_id, is_nullable);
             case act_Max:
-                return get_specialized_callback_2<act_Max>(col_id, nullable);
+                return get_specialized_callback_2<act_Max>(col_id, is_nullable);
             case act_Min:
-                return get_specialized_callback_2<act_Min>(col_id, nullable);
+                return get_specialized_callback_2<act_Min>(col_id, is_nullable);
             case act_FindAll:
-                return get_specialized_callback_2_int<act_FindAll>(col_id, nullable);
+                return get_specialized_callback_2_int<act_FindAll>(col_id, is_nullable);
             case act_CallbackIdx:
-                return get_specialized_callback_2_int<act_CallbackIdx>(col_id, nullable);
+                return get_specialized_callback_2_int<act_CallbackIdx>(col_id, is_nullable);
             default:
                 break;
         }
@@ -777,15 +836,15 @@ protected:
     }
 
     template <Action TAction>
-    static TFind_callback_specialized get_specialized_callback_2(DataType col_id, bool nullable)
+    static TFind_callback_specialized get_specialized_callback_2(DataType col_id, bool is_nullable)
     {
         switch (col_id) {
             case type_Int:
-                return get_specialized_callback_3<TAction, type_Int>(nullable);
+                return get_specialized_callback_3<TAction, type_Int>(is_nullable);
             case type_Float:
-                return get_specialized_callback_3<TAction, type_Float>(nullable);
+                return get_specialized_callback_3<TAction, type_Float>(is_nullable);
             case type_Double:
-                return get_specialized_callback_3<TAction, type_Double>(nullable);
+                return get_specialized_callback_3<TAction, type_Double>(is_nullable);
             default:
                 break;
         }
@@ -794,19 +853,19 @@ protected:
     }
 
     template <Action TAction>
-    static TFind_callback_specialized get_specialized_callback_2_int(DataType col_id, bool nullable)
+    static TFind_callback_specialized get_specialized_callback_2_int(DataType col_id, bool is_nullable)
     {
         if (col_id == type_Int) {
-            return get_specialized_callback_3<TAction, type_Int>(nullable);
+            return get_specialized_callback_3<TAction, type_Int>(is_nullable);
         }
         REALM_ASSERT(false); // Invalid aggregate source column
         return nullptr;
     }
 
     template <Action TAction, DataType TDataType>
-    static TFind_callback_specialized get_specialized_callback_3(bool nullable)
+    static TFind_callback_specialized get_specialized_callback_3(bool is_nullable)
     {
-        if (nullable) {
+        if (is_nullable) {
             return &BaseType::template find_callback_specialization<TConditionFunction, TAction, TDataType, true>;
         }
         else {
@@ -814,6 +873,7 @@ protected:
         }
     }
 };
+
 
 // This node is currently used for floats and doubles only
 template <class ColType, class TConditionFunction>
@@ -838,6 +898,11 @@ public:
     void table_changed() override
     {
         m_condition_column.init(&get_column<ColType>(m_condition_column_idx));
+    }
+
+    void verify_column() const override
+    {
+        do_verify_column(m_condition_column.m_column);
     }
 
     void init() override
@@ -868,6 +933,17 @@ public:
             return find(false);
     }
 
+    virtual std::string describe(util::serializer::SerialisationState& state) const override
+    {
+        REALM_ASSERT(m_condition_column.m_column != nullptr);
+        return state.describe_column(ParentNode::m_table, m_condition_column.m_column->get_column_index())
+            + " " + describe_condition() + " " + util::serializer::print_value(FloatDoubleNode::m_value);
+    }
+    virtual std::string describe_condition() const override
+    {
+        return TConditionFunction::description();
+    }
+
     std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
     {
         return std::unique_ptr<ParentNode>(new FloatDoubleNode(*this, patches));
@@ -883,6 +959,66 @@ public:
 protected:
     TConditionValue m_value;
     SequentialGetter<ColType> m_condition_column;
+};
+
+template <class ColType, class TConditionFunction>
+class SizeNode : public ParentNode {
+public:
+    SizeNode(int64_t v, size_t column)
+        : m_value(v)
+    {
+        m_condition_column_idx = column;
+    }
+
+    void table_changed() override
+    {
+        m_condition_column = &get_column<ColType>(m_condition_column_idx);
+    }
+
+    void verify_column() const override
+    {
+        do_verify_column(m_condition_column);
+    }
+
+    void init() override
+    {
+        ParentNode::init();
+        m_dD = 10.0;
+    }
+
+    size_t find_first_local(size_t start, size_t end) override
+    {
+        for (size_t s = start; s < end; ++s) {
+            TConditionValue v = m_condition_column->get(s);
+            if (v) {
+                int64_t sz = m_size_operator(v);
+                if (TConditionFunction()(sz, m_value))
+                    return s;
+            }
+        }
+        return not_found;
+    }
+
+    std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
+    {
+        return std::unique_ptr<ParentNode>(new SizeNode(*this, patches));
+    }
+
+    SizeNode(const SizeNode& from, QueryNodeHandoverPatches* patches)
+        : ParentNode(from, patches)
+        , m_value(from.m_value)
+        , m_condition_column(from.m_condition_column)
+    {
+        if (m_condition_column && patches)
+            m_condition_column_idx = m_condition_column->get_column_index();
+    }
+
+private:
+    using TConditionValue = typename ColType::value_type;
+
+    int64_t m_value;
+    const ColType* m_condition_column = nullptr;
+    Size<TConditionValue> m_size_operator;
 };
 
 
@@ -909,12 +1045,16 @@ public:
         m_condition_column = &get_column<BinaryColumn>(m_condition_column_idx);
     }
 
+    void verify_column() const override
+    {
+        do_verify_column(m_condition_column);
+    }
+
     void init() override
     {
-        m_dD = 100.0;
+        ParentNode::init();
 
-        if (m_child)
-            m_child->init();
+        m_dD = 100.0;
     }
 
     size_t find_first_local(size_t start, size_t end) override
@@ -926,6 +1066,14 @@ public:
                 return s;
         }
         return not_found;
+    }
+
+    virtual std::string describe(util::serializer::SerialisationState& state) const override
+    {
+        REALM_ASSERT(m_condition_column != nullptr);
+        return state.describe_column(ParentNode::m_table, m_condition_column->get_column_index())
+            + " " + TConditionFunction::description() + " "
+            + util::serializer::print_value(BinaryNode::m_value.get());
     }
 
     std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
@@ -970,18 +1118,29 @@ public:
         m_condition_column = &get_column<TimestampColumn>(m_condition_column_idx);
     }
 
+    void verify_column() const override
+    {
+        do_verify_column(m_condition_column);
+    }
+
     void init() override
     {
-        m_dD = 100.0;
+        ParentNode::init();
 
-        if (m_child)
-            m_child->init();
+        m_dD = 100.0;
     }
 
     size_t find_first_local(size_t start, size_t end) override
     {
         size_t ret = m_condition_column->find<TConditionFunction>(m_value, start, end);
         return ret;
+    }
+
+    virtual std::string describe(util::serializer::SerialisationState& state) const override
+    {
+        REALM_ASSERT(m_condition_column != nullptr);
+        return state.describe_column(ParentNode::m_table, m_condition_column->get_column_index())
+            + " " + TConditionFunction::description() + " " + util::serializer::print_value(TimestampNode::m_value);
     }
 
     std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
@@ -1020,8 +1179,15 @@ public:
         m_column_type = get_real_column_type(m_condition_column_idx);
     }
 
+    void verify_column() const override
+    {
+        do_verify_column(m_condition_column);
+    }
+
     void init() override
     {
+        ParentNode::init();
+
         m_dT = 10.0;
         m_probes = 0;
         m_matches = 0;
@@ -1044,6 +1210,17 @@ public:
     {
         if (m_condition_column && patches)
             m_condition_column_idx = m_condition_column->get_column_index();
+    }
+
+    virtual std::string describe(util::serializer::SerialisationState& state) const override
+    {
+        REALM_ASSERT(m_condition_column != nullptr);
+        StringData sd;
+        if (bool(StringNodeBase::m_value)) {
+            sd = StringData(StringNodeBase::m_value.value());
+        }
+        return state.describe_column(ParentNode::m_table, m_condition_column->get_column_index())
+            + " " + describe_condition() + " " + util::serializer::print_value(sd);
     }
 
 protected:
@@ -1122,9 +1299,6 @@ public:
         m_dD = 100.0;
 
         StringNodeBase::init();
-
-        if (m_child)
-            m_child->init();
     }
 
 
@@ -1139,6 +1313,11 @@ public:
                 return s;
         }
         return not_found;
+    }
+
+    virtual std::string describe_condition() const override
+    {
+        return TConditionFunction::description();
     }
 
     std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
@@ -1187,9 +1366,6 @@ public:
         m_dD = 100.0;
         
         StringNodeBase::init();
-        
-        if (m_child)
-            m_child->init();
     }
     
     
@@ -1205,7 +1381,13 @@ public:
         }
         return not_found;
     }
-    
+
+    virtual std::string describe_condition() const override
+    {
+        return Contains::description();
+    }
+
+
     std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
     {
         return std::unique_ptr<ParentNode>(new StringNode<Contains>(*this, patches));
@@ -1237,17 +1419,17 @@ public:
             m_ucase = std::move(*upper);
             m_lcase = std::move(*lower);
         }
-        
+
         if (v.size() == 0)
             return;
-        
+
         // Build a dictionary of char-to-last distances in the search string
         // (zero indicates that the char is not in needle)
         size_t last_char_pos = m_ucase.size()-1;
         for (size_t i = 0; i < last_char_pos; ++i) {
             // we never jump longer increments than 255 chars, even if needle is longer (to fit in one byte)
             uint8_t jump = last_char_pos-i < 255 ? static_cast<uint8_t>(last_char_pos-i) : 255;
-            
+
             unsigned char uc = m_ucase[i];
             unsigned char lc = m_lcase[i];
             m_charmap[uc] = jump;
@@ -1255,38 +1437,44 @@ public:
         }
 
     }
-    
+
     void init() override
     {
         clear_leaf_state();
-        
+
         m_dD = 100.0;
-        
+
         StringNodeBase::init();
-        
-        if (m_child)
-            m_child->init();
     }
-    
-    
+
+
     size_t find_first_local(size_t start, size_t end) override
     {
         ContainsIns cond;
-        
+
         for (size_t s = start; s < end; ++s) {
             StringData t = get_string(s);
-            
+            // The current behaviour is to return all results when querying for a null string.
+            // See comment above Query_NextGen_StringConditions on why every string including "" contains null.
+            if (!bool(m_value)) {
+                return s;
+            }
             if (cond(StringData(m_value), m_ucase.data(), m_lcase.data(), m_charmap, t))
                 return s;
         }
         return not_found;
     }
-    
+
+    virtual std::string describe_condition() const override
+    {
+        return ContainsIns::description();
+    }
+
     std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
     {
         return std::unique_ptr<ParentNode>(new StringNode<ContainsIns>(*this, patches));
     }
-    
+
     StringNode(const StringNode& from, QueryNodeHandoverPatches* patches)
     : StringNodeBase(from, patches)
     , m_charmap(from.m_charmap)
@@ -1294,218 +1482,45 @@ public:
     , m_lcase(from.m_lcase)
     {
     }
-    
+
 protected:
     std::array<uint8_t, 256> m_charmap;
     std::string m_ucase;
     std::string m_lcase;
 };
 
-// Specialization for Equal condition on Strings - we specialize because we can utilize indexes (if they exist) for
-// Equal.
-// Future optimization: make specialization for greater, notequal, etc
-template <>
-class StringNode<Equal> : public StringNodeBase {
+class StringNodeEqualBase : public StringNodeBase {
 public:
-    StringNode(StringData v, size_t column)
+    StringNodeEqualBase(StringData v, size_t column)
         : StringNodeBase(v, column)
     {
     }
-    ~StringNode() noexcept override
-    {
-        deallocate();
-    }
-
-    void deallocate() noexcept
-    {
-        // Must be called after each query execution too free temporary resources used by the execution. Run in
-        // destructor, but also in Init because a user could define a query once and execute it multiple times.
-        clear_leaf_state();
-
-        if (m_index_matches_destroy)
-            m_index_matches->destroy();
-
-        m_index_matches_destroy = false;
-        m_index_matches.reset();
-        m_index_getter.reset();
-    }
-
-    void init() override
-    {
-        deallocate();
-        m_dD = 10.0;
-        StringNodeBase::init();
-
-        if (m_column_type == col_type_StringEnum) {
-            m_dT = 1.0;
-            m_key_ndx = static_cast<const StringEnumColumn*>(m_condition_column)->get_key_ndx(m_value);
-        }
-        else if (m_condition_column->has_search_index()) {
-            m_dT = 0.0;
-        }
-        else {
-            m_dT = 10.0;
-        }
-
-        if (m_condition_column->has_search_index()) {
-            FindRes fr;
-            InternalFindResult res;
-
-            if (m_column_type == col_type_StringEnum) {
-                fr = static_cast<const StringEnumColumn*>(m_condition_column)->find_all_no_copy(m_value, res);
-            }
-            else {
-                fr = static_cast<const StringColumn*>(m_condition_column)->find_all_no_copy(m_value, res);
-            }
-
-            m_index_matches_destroy = false;
-            m_last_start = size_t(-1);
-
-            switch (fr) {
-                case FindRes_single:
-                    m_index_matches.reset(
-                        new IntegerColumn(IntegerColumn::unattached_root_tag(), Allocator::get_default())); // Throws
-                    m_index_matches->get_root_array()->create(Array::type_Normal);                          // Throws
-                    m_index_matches->add(res.payload);
-                    m_index_matches_destroy = true; // we own m_index_matches, so we must destroy it
-                    m_results_start = 0;
-                    m_results_end = 1;
-                    break;
-                case FindRes_column:
-                    // todo: Apparently we can't use m_index.get_alloc() because it uses default allocator which
-                    // simply makes
-                    // translate(x) = x. Shouldn't it inherit owner column's allocator?!
-                    m_index_matches.reset(new IntegerColumn(m_condition_column->get_alloc(), res.payload)); // Throws
-                    m_results_start = res.start_ndx;
-                    m_results_end = res.end_ndx;
-
-                    // FIXME: handle start and end of find_result!
-                    break;
-                case FindRes_not_found:
-                    m_index_matches.reset();
-                    m_index_getter.reset();
-                    break;
-            }
-
-            if (m_index_matches) {
-                m_index_getter.reset(new SequentialGetter<IntegerColumn>(m_index_matches.get()));
-            }
-        }
-        else if (m_column_type != col_type_String) {
-            REALM_ASSERT_DEBUG(dynamic_cast<const StringEnumColumn*>(m_condition_column));
-            m_cse.init(static_cast<const StringEnumColumn*>(m_condition_column));
-        }
-
-        if (m_child)
-            m_child->init();
-    }
-
-    size_t find_first_local(size_t start, size_t end) override
-    {
-        REALM_ASSERT(m_table);
-
-        if (m_condition_column->has_search_index()) {
-            // Indexed string column
-            if (!m_index_getter)
-                return not_found; // no matches in the index
-
-            if (m_last_start > start)
-                m_last_indexed = m_results_start;
-            m_last_start = start;
-
-            while (m_last_indexed < m_results_end) {
-                m_index_getter->cache_next(m_last_indexed);
-                size_t f = m_index_getter->m_leaf_ptr->find_gte(start, m_last_indexed - m_index_getter->m_leaf_start,
-                                                                m_results_end - m_index_getter->m_leaf_start);
-
-                if (f == not_found) {
-                    // Not found in this leaf - move on to next
-                    m_last_indexed = m_index_getter->m_leaf_end;
-                }
-                else if (f >= (m_results_end - m_index_getter->m_leaf_start)) {
-                    // Found outside valid range
-                    return not_found;
-                }
-                else {
-                    size_t found_index = to_size_t(m_index_getter->m_leaf_ptr->get(f));
-                    if (found_index >= end)
-                        return not_found;
-                    else {
-                        m_last_indexed = f + m_index_getter->m_leaf_start;
-                        return found_index;
-                    }
-                }
-            }
-            return not_found;
-        }
-
-        if (m_column_type != col_type_String) {
-            // Enum string column
-            if (m_key_ndx == not_found)
-                return not_found; // not in key set
-
-            for (size_t s = start; s < end; ++s) {
-                m_cse.cache_next(s);
-                s = m_cse.m_leaf_ptr->find_first(m_key_ndx, s - m_cse.m_leaf_start, m_cse.local_end(end));
-                if (s == not_found)
-                    s = m_cse.m_leaf_end - 1;
-                else
-                    return s + m_cse.m_leaf_start;
-            }
-
-            return not_found;
-        }
-
-        // Normal string column, with long or short leaf
-        for (size_t s = start; s < end; ++s) {
-            const StringColumn* asc = static_cast<const StringColumn*>(m_condition_column);
-            if (s >= m_leaf_end || s < m_leaf_start) {
-                clear_leaf_state();
-                size_t ndx_in_leaf;
-                m_leaf = asc->get_leaf(s, ndx_in_leaf, m_leaf_type);
-                m_leaf_start = s - ndx_in_leaf;
-                if (m_leaf_type == StringColumn::leaf_type_Small)
-                    m_leaf_end = m_leaf_start + static_cast<const ArrayString&>(*m_leaf).size();
-                else if (m_leaf_type == StringColumn::leaf_type_Medium)
-                    m_leaf_end = m_leaf_start + static_cast<const ArrayStringLong&>(*m_leaf).size();
-                else
-                    m_leaf_end = m_leaf_start + static_cast<const ArrayBigBlobs&>(*m_leaf).size();
-                REALM_ASSERT(m_leaf);
-            }
-            size_t end2 = (end > m_leaf_end ? m_leaf_end - m_leaf_start : end - m_leaf_start);
-
-            if (m_leaf_type == StringColumn::leaf_type_Small)
-                s = static_cast<const ArrayString&>(*m_leaf).find_first(m_value, s - m_leaf_start, end2);
-            else if (m_leaf_type == StringColumn::leaf_type_Medium)
-                s = static_cast<const ArrayStringLong&>(*m_leaf).find_first(m_value, s - m_leaf_start, end2);
-            else
-                s = static_cast<const ArrayBigBlobs&>(*m_leaf).find_first(str_to_bin(m_value), true, s - m_leaf_start,
-                                                                          end2);
-
-            if (s == not_found)
-                s = m_leaf_end - 1;
-            else
-                return s + m_leaf_start;
-        }
-
-        return not_found;
-    }
-
-    std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
-    {
-        return std::unique_ptr<ParentNode>(new StringNode<Equal>(*this, patches));
-    }
-
-    StringNode(const StringNode& from, QueryNodeHandoverPatches* patches)
+    StringNodeEqualBase(const StringNodeEqualBase& from, QueryNodeHandoverPatches* patches)
         : StringNodeBase(from, patches)
     {
     }
+    ~StringNodeEqualBase() noexcept override
+    {
+        deallocate();
+    }
 
-private:
+    void deallocate() noexcept;
+    void init() override;
+    size_t find_first_local(size_t start, size_t end) override;
+
+    virtual std::string describe_condition() const override
+    {
+        return Equal::description();
+    }
+
+protected:
     inline BinaryData str_to_bin(const StringData& s) noexcept
     {
         return BinaryData(s.data(), s.size());
     }
+
+    virtual void _search_index_init() = 0;
+    virtual size_t _find_first_local(size_t start, size_t end) = 0;
 
     size_t m_key_ndx = not_found;
     size_t m_last_indexed;
@@ -1522,15 +1537,80 @@ private:
     size_t m_last_start;
 };
 
+
+// Specialization for Equal condition on Strings - we specialize because we can utilize indexes (if they exist) for
+// Equal.
+// Future optimization: make specialization for greater, notequal, etc
+template <>
+class StringNode<Equal> : public StringNodeEqualBase {
+public:
+    using StringNodeEqualBase::StringNodeEqualBase;
+
+    void _search_index_init() override;
+
+    std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
+    {
+        return std::unique_ptr<ParentNode>(new StringNode<Equal>(*this, patches));
+    }
+
+private:
+    size_t _find_first_local(size_t start, size_t end) override;
+};
+
+
+// Specialization for EqualIns condition on Strings - we specialize because we can utilize indexes (if they exist) for
+// EqualIns.
+template <>
+class StringNode<EqualIns> : public StringNodeEqualBase {
+public:
+    StringNode(StringData v, size_t column)
+        : StringNodeEqualBase(v, column)
+    {
+        auto upper = case_map(v, true);
+        auto lower = case_map(v, false);
+        if (!upper || !lower) {
+            error_code = "Malformed UTF-8: " + std::string(v);
+        }
+        else {
+            m_ucase = std::move(*upper);
+            m_lcase = std::move(*lower);
+        }
+    }
+
+    void _search_index_init() override;
+
+    virtual std::string describe_condition() const override
+    {
+        return EqualIns::description();
+    }
+
+    std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
+    {
+        return std::unique_ptr<ParentNode>(new StringNode(*this, patches));
+    }
+
+    StringNode(const StringNode& from, QueryNodeHandoverPatches* patches)
+        : StringNodeEqualBase(from, patches)
+        , m_ucase(from.m_ucase)
+        , m_lcase(from.m_lcase)
+    {
+    }
+
+private:
+    std::string m_ucase;
+    std::string m_lcase;
+
+    size_t _find_first_local(size_t start, size_t end) override;
+};
+
+
 // OR node contains at least two node pointers: Two or more conditions to OR
 // together in m_conditions, and the next AND condition (if any) in m_child.
 //
 // For 'second.equal(23).begin_group().first.equal(111).Or().first.equal(222).end_group().third().equal(555)', this
 // will first set m_conditions[0] = left-hand-side through constructor, and then later, when .first.equal(222) is
-// invoked,
-// invocation will set m_conditions[1] = right-hand-side through Query& Query::Or() (see query.cpp). In there, m_child
-// is
-// also set to next AND condition (if any exists) following the OR.
+// invoked, invocation will set m_conditions[1] = right-hand-side through Query& Query::Or() (see query.cpp).
+// In there, m_child is also set to next AND condition (if any exists) following the OR.
 class OrNode : public ParentNode {
 public:
     OrNode(std::unique_ptr<ParentNode> condition)
@@ -1555,8 +1635,37 @@ public:
         }
     }
 
+    void verify_column() const override
+    {
+        for (auto& condition : m_conditions) {
+            condition->verify_column();
+        }
+    }
+    std::string describe(util::serializer::SerialisationState& state) const override
+    {
+        if (m_conditions.size() >= 2) {
+
+        }
+        std::string s;
+        for (size_t i = 0; i < m_conditions.size(); ++i) {
+            if (m_conditions[i]) {
+                s += m_conditions[i]->describe_expression(state);
+                if (i != m_conditions.size() - 1) {
+                    s += " or ";
+                }
+            }
+        }
+        if (m_conditions.size() > 1) {
+            s = "(" + s + ")";
+        }
+        return s;
+    }
+
+
     void init() override
     {
+        ParentNode::init();
+
         m_dD = 10.0;
 
         m_start.clear();
@@ -1574,9 +1683,6 @@ public:
             v.clear();
             condition->gather_children(v);
         }
-
-        if (m_child)
-            m_child->init();
     }
 
     size_t find_first_local(size_t start, size_t end) override
@@ -1673,8 +1779,15 @@ public:
         m_condition->set_table(*m_table);
     }
 
+    void verify_column() const override
+    {
+        m_condition->verify_column();
+    }
+
     void init() override
     {
+        ParentNode::init();
+
         m_dD = 10.0;
 
         std::vector<ParentNode*> v;
@@ -1687,9 +1800,6 @@ public:
         m_known_range_start = 0;
         m_known_range_end = 0;
         m_first_in_known_range = not_found;
-
-        if (m_child)
-            m_child->init();
     }
 
     size_t find_first_local(size_t start, size_t end) override;
@@ -1710,6 +1820,15 @@ public:
             return s;
         return "";
     }
+
+    virtual std::string describe(util::serializer::SerialisationState& state) const override
+    {
+        if (m_condition) {
+            return "!(" + m_condition->describe_expression(state) + ")";
+        }
+        return "!()";
+    }
+
 
     std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
     {
@@ -1774,12 +1893,29 @@ public:
         m_getter2.init(&get_column<ColType>(m_condition_column_idx2));
     }
 
+    void verify_column() const override
+    {
+        do_verify_column(m_getter1.m_column, m_condition_column_idx1);
+        do_verify_column(m_getter2.m_column, m_condition_column_idx2);
+    }
+
+    virtual std::string describe(util::serializer::SerialisationState& state) const override
+    {
+        REALM_ASSERT(m_getter1.m_column != nullptr && m_getter2.m_column != nullptr);
+        return state.describe_column(ParentNode::m_table, m_getter1.m_column->get_column_index())
+            + " " + describe_condition() + " "
+            + state.describe_column(ParentNode::m_table,m_getter2.m_column->get_column_index());
+    }
+
+    virtual std::string describe_condition() const override
+    {
+        return TConditionFunction::description();
+    }
+
     void init() override
     {
+        ParentNode::init();
         m_dD = 100.0;
-
-        if (m_child)
-            m_child->init();
     }
 
     size_t find_first_local(size_t start, size_t end) override
@@ -1840,6 +1976,8 @@ public:
         , m_value(from.m_value)
         , m_condition_column(from.m_condition_column)
         , m_column_type(from.m_column_type)
+        , m_condition_column_idx1(from.m_condition_column_idx1)
+        , m_condition_column_idx2(from.m_condition_column_idx2)
     {
         if (m_condition_column)
             m_condition_column_idx = m_condition_column->get_column_index();
@@ -1864,40 +2002,20 @@ private:
 class ExpressionNode : public ParentNode {
 
 public:
-    ExpressionNode(std::unique_ptr<Expression> expression)
-        : m_expression(std::move(expression))
-    {
-        m_dD = 10.0;
-        m_dT = 50.0;
-    }
+    ExpressionNode(std::unique_ptr<Expression>);
 
-    void table_changed() override
-    {
-        m_expression->set_base_table(m_table.get());
-    }
+    size_t find_first_local(size_t start, size_t end) override;
 
-    size_t find_first_local(size_t start, size_t end) override
-    {
-        return m_expression->find_first(start, end);
-    }
+    void table_changed() override;
+    void verify_column() const override;
 
-    std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override
-    {
-        return std::unique_ptr<ParentNode>(new ExpressionNode(*this, patches));
-    }
+    virtual std::string describe(util::serializer::SerialisationState& state) const override;
 
-    void apply_handover_patch(QueryNodeHandoverPatches& patches, Group& group) override
-    {
-        m_expression->apply_handover_patch(patches, group);
-        ParentNode::apply_handover_patch(patches, group);
-    }
+    std::unique_ptr<ParentNode> clone(QueryNodeHandoverPatches* patches) const override;
+    void apply_handover_patch(QueryNodeHandoverPatches& patches, Group& group) override;
 
 private:
-    ExpressionNode(const ExpressionNode& from, QueryNodeHandoverPatches* patches)
-        : ParentNode(from, patches)
-        , m_expression(from.m_expression->clone(patches))
-    {
-    }
+    ExpressionNode(const ExpressionNode& from, QueryNodeHandoverPatches* patches);
 
     std::unique_ptr<Expression> m_expression;
 };
@@ -1924,6 +2042,23 @@ public:
         m_column = &const_cast<Table*>(m_table.get())->get_column_link_base(m_origin_column);
         REALM_ASSERT(m_column_type == type_Link || m_column_type == type_LinkList);
     }
+
+    void verify_column() const override
+    {
+        do_verify_column(m_column, m_origin_column);
+    }
+
+    virtual std::string describe(util::serializer::SerialisationState&) const override
+    {
+        throw SerialisationError("Serialising a query which links to an object is currently unsupported.");
+        // We can do something like the following when core gets stable keys
+        //return describe_column() + " " + describe_condition() + " " + util::serializer::print_value(m_target_row.get_index());
+    }
+    virtual std::string describe_condition() const override
+    {
+        return "links to";
+    }
+
 
     size_t find_first_local(size_t start, size_t end) override
     {

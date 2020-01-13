@@ -100,7 +100,7 @@ class Syncer {
             let mapper = Mapper(realm: realm)
             var data = mapper.encode(dataObject: object)
             data.removeValue(forKey: type.primaryKey()!)
-            data[type(of: object).uploadedAtAttribute()] = Date().timeIntervalSince1970
+            data[Swift.type(of: object).uploadedAtAttribute()] = Date().timeIntervalSince1970
             dbref(forType: type, child: object.key()).setValue(data) { error, ref in
                 if let error = error {
                     RealmFire.reportError(.firebaseSyncError(firebaseError: error))

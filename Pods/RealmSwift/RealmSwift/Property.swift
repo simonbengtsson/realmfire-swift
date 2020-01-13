@@ -27,8 +27,7 @@ import Realm
 
  Property instances map to columns in the core database.
  */
-public final class Property: CustomStringConvertible {
-
+public struct Property: CustomStringConvertible {
     // MARK: Properties
 
     internal let rlmProperty: RLMProperty
@@ -38,6 +37,9 @@ public final class Property: CustomStringConvertible {
 
     /// The type of the property.
     public var type: PropertyType { return rlmProperty.type }
+
+    /// Indicates whether this property is an array of the property type.
+    public var isArray: Bool { return rlmProperty.array }
 
     /// Indicates whether this property is indexed.
     public var isIndexed: Bool { return rlmProperty.indexed }
@@ -63,17 +65,7 @@ public final class Property: CustomStringConvertible {
 
 extension Property: Equatable {
     /// Returns whether the two properties are equal.
-    public static func == (lhs: Property, rhs: Property) -> Bool { // swiftlint:disable:this valid_docs
+    public static func == (lhs: Property, rhs: Property) -> Bool {
         return lhs.rlmProperty.isEqual(to: rhs.rlmProperty)
     }
-}
-
-// MARK: Unavailable
-
-extension Property {
-    @available(*, unavailable, renamed: "isIndexed")
-    public var indexed: Bool { fatalError() }
-
-    @available(*, unavailable, renamed: "isOptional")
-    public var optional: Bool { fatalError() }
 }

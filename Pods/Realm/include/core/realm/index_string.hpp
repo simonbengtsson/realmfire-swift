@@ -75,29 +75,39 @@ public:
     }
 
     size_t index_string_find_first(StringData value, ColumnBase* column) const;
-    void index_string_find_all(IntegerColumn& result, StringData value, ColumnBase* column) const;
+    void index_string_find_all(IntegerColumn& result, StringData value, ColumnBase* column, bool case_insensitive = false) const;
     FindRes index_string_find_all_no_copy(StringData value, ColumnBase* column, InternalFindResult& result) const;
     size_t index_string_count(StringData value, ColumnBase* column) const;
 
 private:
     template <IndexMethod>
-    size_t from_list(StringData value, IntegerColumn& result, InternalFindResult& result_ref,
-                     const IntegerColumn& rows, ColumnBase* column) const;
+    size_t from_list(StringData value, InternalFindResult& result_ref, const IntegerColumn& rows,
+                     ColumnBase* column) const;
 
-    template <IndexMethod method, class T>
-    size_t index_string(StringData value, IntegerColumn& result, InternalFindResult& result_ref,
-                        ColumnBase* column) const;
+    void from_list_all(StringData value, IntegerColumn& result, const IntegerColumn& rows, ColumnBase* column) const;
+
+    void from_list_all_ins(StringData value, std::vector<size_t>& result, const IntegerColumn& rows,
+                           ColumnBase* column) const;
+
+    template <IndexMethod method>
+    size_t index_string(StringData value, InternalFindResult& result_ref, ColumnBase* column) const;
+
+    void index_string_all(StringData value, IntegerColumn& result, ColumnBase* column) const;
+
+    void index_string_all_ins(StringData value, IntegerColumn& result, ColumnBase* column) const;
 };
 
 
 class StringIndex {
 public:
     StringIndex(ColumnBase* target_column, Allocator&);
-    StringIndex(ref_type, ArrayParent*, size_t ndx_in_parent, ColumnBase* target_column, bool allow_duplicate_values,
-                Allocator&);
+    StringIndex(ref_type, ArrayParent*, size_t ndx_in_parent, ColumnBase* target_column, Allocator&);
     ~StringIndex() noexcept
     {
     }
+
+    static ref_type create_empty(Allocator& alloc);
+
     void set_target(ColumnBase* target_column) noexcept;
 
     // Accessor concept:
@@ -136,7 +146,7 @@ public:
     template <class T>
     size_t find_first(T value) const;
     template <class T>
-    void find_all(IntegerColumn& result, T value) const;
+    void find_all(IntegerColumn& result, T value, bool case_insensitive = false) const;
     template <class T>
     FindRes find_all_no_copy(T value, InternalFindResult& result) const;
     template <class T>
@@ -149,15 +159,14 @@ public:
     void distinct(IntegerColumn& result) const;
     bool has_duplicate_values() const noexcept;
 
-    /// By default, duplicate values are allowed.
-    void set_allow_duplicate_values(bool) noexcept;
-
     void verify() const;
 #ifdef REALM_DEBUG
-    void verify_entries(const StringColumn& column) const;
+    template <typename T>
+    void verify_entries(const T& column) const;
     void do_dump_node_structure(std::ostream&, int) const;
     void to_dot() const;
     void to_dot(std::ostream&, StringData title = StringData()) const;
+    void to_dot_2(std::ostream&, StringData title = StringData()) const;
 #endif
 
     typedef int32_t key_type;
@@ -196,7 +205,6 @@ private:
     // If the header flag is set, references point to a sub-StringIndex (nesting).
     std::unique_ptr<IndexArray> m_array;
     ColumnBase* m_target_column;
-    bool m_deny_duplicate_values;
 
     struct inner_node_tag {
     };
@@ -249,7 +257,6 @@ private:
 
 #ifdef REALM_DEBUG
     static void dump_node_structure(const Array& node, std::ostream&, int level);
-    void to_dot_2(std::ostream&, StringData title = StringData()) const;
     static void array_to_dot(std::ostream&, const Array&);
     static void keys_to_dot(std::ostream&, const Array&, StringData title = StringData());
 #endif
@@ -277,7 +284,7 @@ struct GetIndexData<int64_t> {
     static StringData get_index_data(const int64_t& value, StringIndex::StringConversionBuffer& buffer)
     {
         const char* c = reinterpret_cast<const char*>(&value);
-        std::copy_n(c, sizeof(int64_t), buffer.data());
+        realm::safe_copy_n(c, sizeof(int64_t), buffer.data());
         return StringData{buffer.data(), sizeof(int64_t)};
     }
 };
@@ -346,15 +353,13 @@ inline StringData to_str(T&& value, StringIndex::StringConversionBuffer& buffer)
 inline StringIndex::StringIndex(ColumnBase* target_column, Allocator& alloc)
     : m_array(create_node(alloc, true)) // Throws
     , m_target_column(target_column)
-    , m_deny_duplicate_values(false)
 {
 }
 
 inline StringIndex::StringIndex(ref_type ref, ArrayParent* parent, size_t ndx_in_parent, ColumnBase* target_column,
-                                bool deny_duplicate_values, Allocator& alloc)
+                                Allocator& alloc)
     : m_array(new IndexArray(alloc))
     , m_target_column(target_column)
-    , m_deny_duplicate_values(deny_duplicate_values)
 {
     REALM_ASSERT_EX(Array::get_context_flag_from_header(alloc.translate(ref)), ref, size_t(alloc.translate(ref)));
     m_array->init_from_ref(ref);
@@ -364,13 +369,7 @@ inline StringIndex::StringIndex(ref_type ref, ArrayParent* parent, size_t ndx_in
 inline StringIndex::StringIndex(inner_node_tag, Allocator& alloc)
     : m_array(create_node(alloc, false)) // Throws
     , m_target_column(nullptr)
-    , m_deny_duplicate_values(false)
 {
-}
-
-inline void StringIndex::set_allow_duplicate_values(bool allow) noexcept
-{
-    m_deny_duplicate_values = !allow;
 }
 
 // Byte order of the key is *reversed*, so that for the integer index, the least significant
@@ -532,11 +531,11 @@ size_t StringIndex::find_first(T value) const
 }
 
 template <class T>
-void StringIndex::find_all(IntegerColumn& result, T value) const
+void StringIndex::find_all(IntegerColumn& result, T value, bool case_insensitive) const
 {
     // Use direct access method
     StringConversionBuffer buffer;
-    return m_array->index_string_find_all(result, to_str(value, buffer), m_target_column);
+    return m_array->index_string_find_all(result, to_str(value, buffer), m_target_column, case_insensitive);
 }
 
 template <class T>

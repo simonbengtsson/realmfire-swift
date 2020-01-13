@@ -20,12 +20,13 @@
 
 #import "RLMAccessor.h"
 #import "RLMObject_Private.h"
+#import "RLMObject_Private.hpp"
 #import "RLMObjectSchema_Private.hpp"
 #import "RLMObjectStore.h"
 #import "RLMProperty_Private.h"
 #import "RLMRealm_Dynamic.h"
 #import "RLMRealm_Private.hpp"
-#import "RLMResults_Private.h"
+#import "RLMResults_Private.hpp"
 #import "RLMSchema_Private.hpp"
 #import "RLMUtil.hpp"
 
@@ -55,6 +56,7 @@ using namespace realm;
 
 @implementation RLMMigration {
     realm::Schema *_schema;
+    std::unordered_map<NSString *, realm::IndexSet> _deletedObjectIndices;
 }
 
 - (instancetype)initWithRealm:(RLMRealm *)realm oldRealm:(RLMRealm *)oldRealm schema:(realm::Schema &)schema {
@@ -76,30 +78,35 @@ using namespace realm;
     return self.realm.schema;
 }
 
-- (void)enumerateObjects:(NSString *)className block:(RLMObjectMigrationBlock)block {
-    // get all objects
+- (void)enumerateObjects:(NSString *)className block:(__attribute__((noescape)) RLMObjectMigrationBlock)block {
     RLMResults *objects = [_realm.schema schemaForClassName:className] ? [_realm allObjects:className] : nil;
     RLMResults *oldObjects = [_oldRealm.schema schemaForClassName:className] ? [_oldRealm allObjects:className] : nil;
 
-    if (objects && oldObjects) {
-        for (long i = oldObjects.count - 1; i >= 0; i--) {
+    // For whatever reason if this is a newly added table we enumerate the
+    // objects in it, while in all other cases we enumerate only the existing
+    // objects. It's unclear how this could be useful, but changing it would
+    // also be a pointless breaking change and it's unlikely to be hurting anyone.
+    if (objects && !oldObjects) {
+        for (auto i = objects.count; i > 0; --i) {
             @autoreleasepool {
-                block(oldObjects[i], objects[i]);
+                block(nil, objects[i - 1]);
             }
         }
+        return;
     }
-    else if (objects) {
-        for (long i = objects.count - 1; i >= 0; i--) {
-            @autoreleasepool {
-                block(nil, objects[i]);
-            }
+
+    auto count = oldObjects.count;
+    if (count == 0) {
+        return;
+    }
+    auto deletedObjects = _deletedObjectIndices.find(className);
+    for (auto i = count; i > 0; --i) {
+        auto index = i - 1;
+        if (deletedObjects != _deletedObjectIndices.end() && deletedObjects->second.contains(index)) {
+            continue;
         }
-    }
-    else if (oldObjects) {
-        for (long i = oldObjects.count - 1; i >= 0; i--) {
-            @autoreleasepool {
-                block(oldObjects[i], nil);
-            }
+        @autoreleasepool {
+            block(oldObjects[index], objects[index]);
         }
     }
 }
@@ -117,6 +124,8 @@ using namespace realm;
 
         block(self, _oldRealm->_realm->schema_version());
 
+        [self deleteObjectsMarkedForDeletion];
+
         _oldRealm = nil;
         _realm = nil;
     }
@@ -131,7 +140,31 @@ using namespace realm;
 }
 
 - (void)deleteObject:(RLMObject *)object {
-    [_realm deleteObject:object];
+    _deletedObjectIndices[object.objectSchema.className].add(object->_row.get_index());
+}
+
+- (void)deleteObjectsMarkedForDeletion {
+    for (auto& objectType : _deletedObjectIndices) {
+        TableRef table = ObjectStore::table_for_object_type(_realm.group, objectType.first.UTF8String);
+        if (!table) {
+            continue;
+        }
+
+        auto& indices = objectType.second;
+        // Just clear the table if we're removing all of the rows
+        if (table->size() == indices.count()) {
+            table->clear();
+        }
+        // Otherwise delete in reverse order to avoid invaliding any of the
+        // not-yet-deleted indices
+        else {
+            for (auto it = std::make_reverse_iterator(indices.end()), end = std::make_reverse_iterator(indices.begin()); it != end; ++it) {
+                for (size_t i = it->second; i > it->first; --i) {
+                    table->move_last_over(i - 1);
+                }
+            }
+        }
+    }
 }
 
 - (BOOL)deleteDataForClassName:(NSString *)name {
@@ -143,11 +176,8 @@ using namespace realm;
     if (!table) {
         return false;
     }
-
-    if ([_realm.schema schemaForClassName:name]) {
-        table->clear();
-    }
-    else {
+    _deletedObjectIndices[name].set(table->size());
+    if (![_realm.schema schemaForClassName:name]) {
         realm::ObjectStore::delete_data_for_object(_realm.group, name.UTF8String);
     }
 
@@ -155,8 +185,8 @@ using namespace realm;
 }
 
 - (void)renamePropertyForClass:(NSString *)className oldName:(NSString *)oldName newName:(NSString *)newName {
-    const char *objectType = className.UTF8String;
-    realm::ObjectStore::rename_property(_realm.group, *_schema, objectType, oldName.UTF8String, newName.UTF8String);
+    realm::ObjectStore::rename_property(_realm.group, *_schema, className.UTF8String,
+                                        oldName.UTF8String, newName.UTF8String);
 }
 
 @end

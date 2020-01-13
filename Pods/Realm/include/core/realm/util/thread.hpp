@@ -22,7 +22,10 @@
 #include <exception>
 
 #ifdef _WIN32
-#include <win32/pthread/pthread.h>
+#include <thread>
+#include <condition_variable> // for windows non-interprocess condvars we use std::condition_variable
+#include <Windows.h>
+#include <process.h> // _getpid()
 #else
 #include <pthread.h>
 #endif
@@ -38,7 +41,6 @@
 #include <realm/util/assert.hpp>
 #include <realm/util/terminate.hpp>
 #include <memory>
-#include <realm/util/meta.hpp>
 
 #include <atomic>
 
@@ -58,6 +60,12 @@ public:
 
     template <class F>
     explicit Thread(F func);
+
+    // Disable copying. It is an error to copy this Thread class.
+    Thread(const Thread&) = delete;
+    Thread& operator=(const Thread&) = delete;
+
+    Thread(Thread&&);
 
     /// This method is an extension of the API provided by
     /// std::thread. This method exists because proper move semantics
@@ -84,9 +92,13 @@ public:
     static bool get_name(std::string& name);
 
 private:
-    pthread_t m_id;
-    bool m_joinable;
 
+#ifdef _WIN32
+    std::thread m_std_thread;
+#else    
+    pthread_t m_id;
+#endif
+    bool m_joinable;
     typedef void* (*entry_func_type)(void*);
 
     void start(entry_func_type, void* arg);
@@ -116,14 +128,26 @@ public:
     /// legal and will not cause any system resources to be leaked.
     Mutex(process_shared_tag);
 
+    // Disable copying.
+    Mutex(const Mutex&) = delete;
+    Mutex& operator=(const Mutex&) = delete;
+
     friend class LockGuard;
     friend class UniqueLock;
+    friend class InterprocessCondVar;
 
     void lock() noexcept;
+    bool try_lock() noexcept;
     void unlock() noexcept;
 
 protected:
+#ifdef _WIN32
+    // Used for non-process-shared mutex. We only know at runtime whether or not to use it, depending on if we call
+    // Mutex::Mutex(process_shared_tag)
+    CRITICAL_SECTION m_critical_section;
+#else
     pthread_mutex_t m_impl = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
     struct no_init_tag {
     };
@@ -139,7 +163,9 @@ protected:
     REALM_NORETURN static void destroy_failed(int) noexcept;
     REALM_NORETURN static void lock_failed(int) noexcept;
 
+private:
     friend class CondVar;
+    friend class RobustMutex;
 };
 
 
@@ -212,6 +238,9 @@ public:
     template <class Func>
     void lock(Func recover_func);
 
+    template <class Func>
+    bool try_lock(Func recover_func);
+
     void unlock() noexcept;
 
     /// Low-level locking of robust mutex.
@@ -230,6 +259,27 @@ public:
     /// robust_lock() that returns false and the corresponding call to
     /// unlock().
     bool low_level_lock();
+
+    /// Low-level try-lock of robust mutex
+    ///
+    /// If the present platform does not support robust mutexes, this
+    /// function always returns 0 or 1. Otherwise it returns -1 if,
+    /// and only if a thread has died while holding a lock.
+    ///
+    /// Returns 1 if the lock is succesfully obtained.
+    /// Returns 0 if the lock is held by somebody else (not obtained)
+    /// Returns -1 if a thread has died while holding a lock.
+    ///
+    /// \note Most application should never call this function
+    /// directly. It is called automatically when using the ordinary
+    /// lock() function.
+    ///
+    /// \throw NotRecoverable If this mutex has entered the "not
+    /// recoverable" state. It enters this state if
+    /// mark_as_consistent() is not called between a call to
+    /// robust_lock() that returns false and the corresponding call to
+    /// unlock().
+    int try_low_level_lock();
 
     /// Pull this mutex out of the 'inconsistent' state.
     ///
@@ -312,7 +362,11 @@ public:
     void notify_all() noexcept;
 
 private:
+#ifdef _WIN32
+    CONDITION_VARIABLE m_condvar = CONDITION_VARIABLE_INIT;
+#else
     pthread_cond_t m_impl;
+#endif
 
     REALM_NORETURN static void init_failed(int);
     REALM_NORETURN static void attr_init_failed(int);
@@ -335,6 +389,15 @@ inline Thread::Thread(F func)
     std::unique_ptr<F> func2(new F(func));       // Throws
     start(&Thread::entry_point<F>, func2.get()); // Throws
     func2.release();
+}
+
+inline Thread::Thread(Thread&& thread)
+{
+#ifndef _WIN32
+    m_id = thread.m_id;
+    m_joinable = thread.m_joinable;
+    thread.m_joinable = false;
+#endif
 }
 
 template <class F>
@@ -361,10 +424,14 @@ inline bool Thread::joinable() noexcept
 
 inline void Thread::start(entry_func_type entry_func, void* arg)
 {
+#ifdef _WIN32
+    m_std_thread = std::thread(entry_func, arg);
+#else
     const pthread_attr_t* attr = nullptr; // Use default thread attributes
     int r = pthread_create(&m_id, attr, entry_func, arg);
     if (REALM_UNLIKELY(r != 0))
         create_failed(r); // Throws
+#endif
 }
 
 template <class F>
@@ -394,30 +461,62 @@ inline Mutex::Mutex(process_shared_tag)
 
 inline Mutex::~Mutex() noexcept
 {
+#ifndef _WIN32
     int r = pthread_mutex_destroy(&m_impl);
     if (REALM_UNLIKELY(r != 0))
         destroy_failed(r);
+#else
+    DeleteCriticalSection(&m_critical_section);
+#endif
 }
 
 inline void Mutex::init_as_regular()
 {
+#ifndef _WIN32
     int r = pthread_mutex_init(&m_impl, 0);
     if (REALM_UNLIKELY(r != 0))
         init_failed(r);
+#else
+    InitializeCriticalSection(&m_critical_section);
+#endif
 }
 
 inline void Mutex::lock() noexcept
 {
+#ifdef _WIN32
+    EnterCriticalSection(&m_critical_section);
+#else
     int r = pthread_mutex_lock(&m_impl);
     if (REALM_LIKELY(r == 0))
         return;
     lock_failed(r);
+#endif
+}
+
+inline bool Mutex::try_lock() noexcept
+{
+#ifdef _WIN32
+    return TryEnterCriticalSection(&m_critical_section);
+#else
+    int r = pthread_mutex_trylock(&m_impl);
+    if (r == EBUSY) {
+        return false;
+    }
+    else if (r == 0) {
+        return true;
+    }
+    lock_failed(r);
+#endif
 }
 
 inline void Mutex::unlock() noexcept
 {
+#ifdef _WIN32
+    LeaveCriticalSection(&m_critical_section);
+#else
     int r = pthread_mutex_unlock(&m_impl);
     REALM_ASSERT(r == 0);
+#endif
 }
 
 
@@ -504,7 +603,7 @@ inline void RobustMutex::lock(Func recover_func)
         mark_as_consistent();
         // If we get this far, the protected memory has been
         // brought back into a consistent state, and the mutex has
-        // been notified aboit this. This means that we can safely
+        // been notified about this. This means that we can safely
         // enter the applications critical section.
     }
     catch (...) {
@@ -517,6 +616,33 @@ inline void RobustMutex::lock(Func recover_func)
     }
 }
 
+template <class Func>
+inline bool RobustMutex::try_lock(Func recover_func)
+{
+    int lock_result = try_low_level_lock(); // Throws
+    if (lock_result == 0) return false;
+    bool no_thread_has_died = lock_result == 1;
+    if (REALM_LIKELY(no_thread_has_died))
+        return true;
+    try {
+        recover_func(); // Throws
+        mark_as_consistent();
+        // If we get this far, the protected memory has been
+        // brought back into a consistent state, and the mutex has
+        // been notified aboit this. This means that we can safely
+        // enter the applications critical section.
+    }
+    catch (...) {
+        // Unlocking without first calling mark_as_consistent()
+        // means that the mutex enters the "not recoverable"
+        // state, which will cause all future attempts at locking
+        // to fail.
+        unlock();
+        throw;
+    }
+    return true;
+}
+
 inline void RobustMutex::unlock() noexcept
 {
     Mutex::unlock();
@@ -525,23 +651,31 @@ inline void RobustMutex::unlock() noexcept
 
 inline CondVar::CondVar()
 {
+#ifndef _WIN32
     int r = pthread_cond_init(&m_impl, 0);
     if (REALM_UNLIKELY(r != 0))
         init_failed(r);
+#endif
 }
 
 inline CondVar::~CondVar() noexcept
 {
+#ifndef _WIN32
     int r = pthread_cond_destroy(&m_impl);
     if (REALM_UNLIKELY(r != 0))
         destroy_failed(r);
+#endif
 }
 
 inline void CondVar::wait(LockGuard& l) noexcept
 {
+#ifdef _WIN32
+    SleepConditionVariableCS(&m_condvar, &l.m_mutex.m_critical_section, INFINITE);
+#else
     int r = pthread_cond_wait(&m_impl, &l.m_mutex.m_impl);
     if (REALM_UNLIKELY(r != 0))
         REALM_TERMINATE("pthread_cond_wait() failed");
+#endif
 }
 
 template <class Func>
@@ -550,12 +684,29 @@ inline void CondVar::wait(RobustMutex& m, Func recover_func, const struct timesp
     int r;
 
     if (!tp) {
+#ifdef _WIN32
+        if (!SleepConditionVariableCS(&m_condvar, &m.m_critical_section, INFINITE))
+            r = GetLastError();
+        else
+            r = 0;
+#else
         r = pthread_cond_wait(&m_impl, &m.m_impl);
+#endif
     }
     else {
+#ifdef _WIN32
+        if (!SleepConditionVariableCS(&m_condvar, &m.m_critical_section, tp->tv_sec / 1000)) {
+            r = GetLastError();
+            if (r == ERROR_TIMEOUT)
+                return;
+        } else {
+            r = 0
+        }
+#else
         r = pthread_cond_timedwait(&m_impl, &m.m_impl, tp);
         if (r == ETIMEDOUT)
             return;
+#endif
     }
 
     if (REALM_LIKELY(r == 0))
@@ -583,14 +734,22 @@ inline void CondVar::wait(RobustMutex& m, Func recover_func, const struct timesp
 
 inline void CondVar::notify() noexcept
 {
+#ifdef _WIN32
+    WakeConditionVariable(&m_condvar);
+#else
     int r = pthread_cond_signal(&m_impl);
     REALM_ASSERT(r == 0);
+#endif
 }
 
 inline void CondVar::notify_all() noexcept
 {
+#ifdef _WIN32
+    WakeAllConditionVariable(&m_condvar);
+#else
     int r = pthread_cond_broadcast(&m_impl);
     REALM_ASSERT(r == 0);
+#endif
 }
 
 

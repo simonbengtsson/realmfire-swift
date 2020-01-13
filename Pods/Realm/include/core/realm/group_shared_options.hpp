@@ -31,18 +31,22 @@ struct SharedGroupOptions {
     enum class Durability : uint16_t {
         Full,
         MemOnly,
-        Async ///< Not yet supported on windows.
+        Async, ///< Not yet supported on windows.
+        Unsafe  // If you use this, you loose ACID property
     };
 
     explicit SharedGroupOptions(Durability level = Durability::Full, const char* key = nullptr,
                                 bool allow_upgrade = true,
                                 std::function<void(int, int)> file_upgrade_callback = std::function<void(int, int)>(),
-                                std::string temp_directory = sys_tmp_dir)
+                                std::string temp_directory = sys_tmp_dir,
+                                bool track_metrics = false)
         : durability(level)
         , encryption_key(key)
         , allow_file_format_upgrade(allow_upgrade)
         , upgrade_callback(file_upgrade_callback)
         , temp_dir(temp_directory)
+        , enable_metrics(track_metrics)
+
     {
     }
 
@@ -52,6 +56,7 @@ struct SharedGroupOptions {
         , allow_file_format_upgrade(true)
         , upgrade_callback(std::function<void(int, int)>())
         , temp_dir(sys_tmp_dir)
+        , enable_metrics(false)
     {
     }
 
@@ -87,8 +92,19 @@ struct SharedGroupOptions {
     /// This string should include a trailing slash '/'.
     std::string temp_dir;
 
+    /// Controls the feature of collecting various metrics to the SharedGroup.
+    /// A prerequisite is compiling with REALM_METRICS=ON.
+    bool enable_metrics;
+
+    /// sys_tmp_dir will be used if the temp_dir is empty when creating SharedGroupOptions.
+    /// It must be writable and allowed to create pipe/fifo file on it.
+    /// set_sys_tmp_dir is not a thread-safe call and it is only supposed to be called once
+    //  when process starts.
+    static void set_sys_tmp_dir(const std::string& dir) noexcept { sys_tmp_dir = dir; }
+    static std::string get_sys_tmp_dir() noexcept { return sys_tmp_dir; }
+
 private:
-    const static std::string sys_tmp_dir;
+    static std::string sys_tmp_dir;
 };
 
 } // end namespace realm

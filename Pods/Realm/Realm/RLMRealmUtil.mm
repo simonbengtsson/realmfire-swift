@@ -36,10 +36,10 @@
 #import <unistd.h>
 
 // Global realm state
-static std::mutex s_realmCacheMutex;
-static std::map<std::string, NSMapTable *> s_realmsPerPath;
+static std::mutex& s_realmCacheMutex = *new std::mutex();
+static std::map<std::string, NSMapTable *>& s_realmsPerPath = *new std::map<std::string, NSMapTable *>();
 
-void RLMCacheRealm(std::string const& path, RLMRealm *realm) {
+void RLMCacheRealm(std::string const& path, __unsafe_unretained RLMRealm *const realm) {
     std::lock_guard<std::mutex> lock(s_realmCacheMutex);
     NSMapTable *realms = s_realmsPerPath[path];
     if (!realms) {
@@ -64,25 +64,29 @@ void RLMClearRealmCache() {
     s_realmsPerPath.clear();
 }
 
+bool RLMIsInRunLoop() {
+    // The main thread may not be in a run loop yet if we're called from
+    // something like `applicationDidFinishLaunching:`, but it presumably will
+    // be in the future
+    if ([NSThread isMainThread]) {
+        return true;
+    }
+    // Current mode indicates why the current callout from the runloop was made,
+    // and is null if a runloop callout isn't currently being processed
+    if (auto mode = CFRunLoopCopyCurrentMode(CFRunLoopGetCurrent())) {
+        CFRelease(mode);
+        return true;
+    }
+    return false;
+}
+
 namespace {
 class RLMNotificationHelper : public realm::BindingContext {
 public:
     RLMNotificationHelper(RLMRealm *realm) : _realm(realm) { }
 
     bool can_deliver_notifications() const noexcept override {
-        // The main thread may not be in a run loop yet if we're called from
-        // something like `applicationDidFinishLaunching:`, but it presumably will
-        // be in the future
-        if ([NSThread isMainThread]) {
-            return true;
-        }
-        // Current mode indicates why the current callout from the runloop was made,
-        // and is null if a runloop callout isn't currently being processed
-        if (auto mode = CFRunLoopCopyCurrentMode(CFRunLoopGetCurrent())) {
-            CFRelease(mode);
-            return true;
-        }
-        return false;
+        return RLMIsInRunLoop();
     }
 
     void changes_available() override {
@@ -138,6 +142,6 @@ private:
 } // anonymous namespace
 
 
-std::unique_ptr<realm::BindingContext> RLMCreateBindingContext(RLMRealm *realm) {
+std::unique_ptr<realm::BindingContext> RLMCreateBindingContext(__unsafe_unretained RLMRealm *const realm) {
     return std::unique_ptr<realm::BindingContext>(new RLMNotificationHelper(realm));
 }

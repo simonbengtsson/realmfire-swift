@@ -85,6 +85,7 @@ public:
     void insert(size_t ndx, StringData value);
     void erase(size_t row_ndx);
     void move_last_over(size_t row_ndx);
+    void swap_rows(size_t row_ndx_1, size_t row_ndx_2) override;
     void clear();
     bool is_nullable() const noexcept final;
 
@@ -111,7 +112,6 @@ public:
 
     // Search index
     StringData get_index_data(size_t ndx, StringIndex::StringConversionBuffer& buffer) const noexcept final;
-    void set_search_index_allow_duplicate_values(bool) noexcept override;
     bool supports_search_index() const noexcept final
     {
         return true;

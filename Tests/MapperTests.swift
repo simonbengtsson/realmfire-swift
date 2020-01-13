@@ -16,7 +16,7 @@ class MapperTests: XCTestCase {
     override func setUp() {
         super.setUp()
         var conf = Realm.Configuration()
-        conf.inMemoryIdentifier = self.name!
+        conf.inMemoryIdentifier = self.name
         let realm = try! Realm(configuration: conf)
         testRealm = realm
         mapper = Mapper(realm: testRealm)
@@ -52,7 +52,6 @@ class MapperTests: XCTestCase {
         
         let res = mapper.decode(syncObjectValue: "none-existing", type: TestPerson.self)
         assert(res.realm == nil)
-        assert(mapper.missingDependencies.first?.primaryKey == "none-existing")
     }
     
     func testSyncList() {

@@ -60,7 +60,7 @@ public class RealmFire {
         guard realm.isInWriteTransaction else {
             fatalError("RealmFire.markForSync has to be called in a write transaction")
         }
-        metaHandler.addUpdatedObject(objects, realm: realm)
+        metaHandler.addUpdatedObject(object, realm: realm)
     }
     
     static func mapDate(encode: @escaping (_ date: Date) -> Any?, decode: @escaping (_ value: Any) -> Date?) {

@@ -34,6 +34,7 @@
 #include <realm/index_string.hpp>
 #include <realm/impl/destroy_guard.hpp>
 #include <realm/exceptions.hpp>
+#include <realm/table_ref.hpp>
 
 namespace realm {
 
@@ -90,7 +91,7 @@ public:
     ColumnRandIterator<ColumnDataType> operator--(int);
     ColumnRandIterator<ColumnDataType> operator+(ptrdiff_t movement);
     ColumnRandIterator<ColumnDataType> operator-(ptrdiff_t movement);
-    ptrdiff_t operator-(const ColumnRandIterator<ColumnDataType>& rawIterator);
+    ptrdiff_t operator-(const ColumnRandIterator<ColumnDataType>& right) const;
     const ColumnDataType operator*() const;
     const ColumnDataType operator->() const;
     const ColumnDataType operator[](ptrdiff_t offset) const;
@@ -196,6 +197,10 @@ public:
     {
     }
 
+    // Disable copying, this is not supported.
+    ColumnBase& operator=(const ColumnBase&) = delete;
+    ColumnBase(const ColumnBase&) = delete;
+
     // Getter function for index. For integer index, the caller must supply a
     // buffer that we can store the extracted value in (it may be bitpacked, so
     // we cannot return a pointer in to the Array as we do with String index).
@@ -208,8 +213,7 @@ public:
     virtual void destroy_search_index() noexcept;
     virtual const StringIndex* get_search_index() const noexcept;
     virtual StringIndex* get_search_index() noexcept;
-    virtual void set_search_index_ref(ref_type, ArrayParent*, size_t ndx_in_parent, bool allow_duplicate_values);
-    virtual void set_search_index_allow_duplicate_values(bool) noexcept;
+    virtual void set_search_index_ref(ref_type, ArrayParent*, size_t ndx_in_parent);
 
     virtual Allocator& get_alloc() const noexcept = 0;
 
@@ -273,7 +277,7 @@ public:
     /// the pointer to the subtable accessor at the specified row index if it
     /// exists, otherwise it returns null. For other column types, this function
     /// returns null.
-    virtual Table* get_subtable_accessor(size_t row_ndx) const noexcept;
+    virtual TableRef get_subtable_accessor(size_t row_ndx) const noexcept;
 
     /// Detach and remove the subtable accessor at the specified row if it
     /// exists. For column types that are unable to contain subtable, this
@@ -285,6 +289,7 @@ public:
     /// See Table::adj_acc_move_over()
     virtual void adj_acc_move_over(size_t from_row_ndx, size_t to_row_ndx) noexcept;
     virtual void adj_acc_swap_rows(size_t row_ndx_1, size_t row_ndx_2) noexcept;
+    virtual void adj_acc_move_row(size_t from_ndx, size_t to_ndx) noexcept;
     virtual void adj_acc_merge_rows(size_t old_row_ndx, size_t new_row_ndx) noexcept;
     virtual void adj_acc_clear_root_table() noexcept;
 
@@ -503,8 +508,7 @@ public:
         return m_search_index.get();
     }
     void destroy_search_index() noexcept override;
-    void set_search_index_ref(ref_type ref, ArrayParent* parent, size_t ndx_in_parent,
-                              bool allow_duplicate_valaues) final;
+    void set_search_index_ref(ref_type ref, ArrayParent* parent, size_t ndx_in_parent) final;
     StringIndex* create_search_index() override = 0;
 
 protected:
@@ -805,22 +809,13 @@ inline StringIndex* ColumnBase::get_search_index() noexcept
     return nullptr;
 }
 
-inline void ColumnBase::set_search_index_ref(ref_type, ArrayParent*, size_t, bool)
-{
-}
-
-inline void ColumnBase::set_search_index_allow_duplicate_values(bool) noexcept
+inline void ColumnBase::set_search_index_ref(ref_type, ArrayParent*, size_t)
 {
 }
 
 inline void ColumnBase::discard_child_accessors() noexcept
 {
     do_discard_child_accessors();
-}
-
-inline Table* ColumnBase::get_subtable_accessor(size_t) const noexcept
-{
-    return 0;
 }
 
 inline void ColumnBase::discard_subtable_accessor(size_t) noexcept
@@ -844,6 +839,11 @@ inline void ColumnBase::adj_acc_move_over(size_t, size_t) noexcept
 }
 
 inline void ColumnBase::adj_acc_swap_rows(size_t, size_t) noexcept
+{
+    // Noop
+}
+
+inline void ColumnBase::adj_acc_move_row(size_t, size_t) noexcept
 {
     // Noop
 }
@@ -1813,9 +1813,9 @@ ColumnRandIterator<ColumnDataType> ColumnRandIterator<ColumnDataType>::operator-
 }
 
 template <class ColumnDataType>
-ptrdiff_t ColumnRandIterator<ColumnDataType>::operator-(const ColumnRandIterator<ColumnDataType>& other)
+ptrdiff_t ColumnRandIterator<ColumnDataType>::operator-(const ColumnRandIterator<ColumnDataType>& right) const
 {
-    return m_col_ndx - other.m_col_ndx;
+    return m_col_ndx - right.m_col_ndx;
 }
 
 template <class ColumnDataType>

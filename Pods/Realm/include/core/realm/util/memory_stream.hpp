@@ -24,8 +24,6 @@
 #include <istream>
 #include <ostream>
 
-#include <realm/util/features.h>
-
 namespace realm {
 namespace util {
 
@@ -34,21 +32,23 @@ public:
     MemoryInputStreambuf();
     ~MemoryInputStreambuf() noexcept;
 
+    /// Behavior is undefined if the size of the specified buffer exceeds
+    /// PTRDIFF_MAX.
     void set_buffer(const char* begin, const char* end) noexcept;
 
 private:
-    int_type underflow() override;
-    int_type uflow() override;
-    int_type pbackfail(int_type ch) override;
-    std::streamsize showmanyc() override;
-    pos_type seekoff(off_type off, std::ios_base::seekdir dir,
-                     std::ios_base::openmode which = std::ios_base::in | std::ios_base::out) override;
-    pos_type seekpos(pos_type pos, std::ios_base::openmode which = std::ios_base::in | std::ios_base::out) override;
-
-
     const char* m_begin;
     const char* m_end;
     const char* m_curr;
+
+    int_type underflow() override;
+    int_type uflow() override;
+    int_type pbackfail(int_type) override;
+    std::streamsize showmanyc() override;
+    pos_type seekoff(off_type, std::ios_base::seekdir, std::ios_base::openmode) override;
+    pos_type seekpos(pos_type, std::ios_base::openmode) override;
+
+    pos_type do_seekoff(off_type, std::ios_base::seekdir, std::ios_base::openmode);
 };
 
 
@@ -57,6 +57,8 @@ public:
     MemoryOutputStreambuf();
     ~MemoryOutputStreambuf() noexcept;
 
+    /// Behavior is undefined if the size of the specified buffer exceeds
+    /// PTRDIFF_MAX.
     void set_buffer(char* begin, char* end) noexcept;
 
     /// Returns the amount of data written to the buffer.
@@ -69,11 +71,13 @@ public:
     MemoryInputStream();
     ~MemoryInputStream() noexcept;
 
+    /// \{ Behavior is undefined if the size of the specified buffer exceeds
+    /// PTRDIFF_MAX.
     void set_buffer(const char* begin, const char* end) noexcept;
-
-    void set_string(const std::string&);
-
+    template <size_t N> void set_buffer(const char (&buffer)[N]) noexcept;
+    void set_string(const std::string&) noexcept;
     void set_c_string(const char* c_str) noexcept;
+    /// \}
 
 private:
     MemoryInputStreambuf m_streambuf;
@@ -85,10 +89,11 @@ public:
     MemoryOutputStream();
     ~MemoryOutputStream() noexcept;
 
+    /// \{ Behavior is undefined if the size of the specified buffer exceeds
+    /// PTRDIFF_MAX.
     void set_buffer(char* begin, char* end) noexcept;
-
-    template <size_t N>
-    void set_buffer(char (&buffer)[N]) noexcept;
+    template <size_t N> void set_buffer(char (&buffer)[N]) noexcept;
+    /// \}
 
     /// Returns the amount of data written to the underlying buffer.
     size_t size() const noexcept;
@@ -111,11 +116,11 @@ inline MemoryInputStreambuf::~MemoryInputStreambuf() noexcept
 {
 }
 
-inline void MemoryInputStreambuf::set_buffer(const char* begin, const char* end) noexcept
+inline void MemoryInputStreambuf::set_buffer(const char* b, const char* e) noexcept
 {
-    m_begin = begin;
-    m_end = end;
-    m_curr = begin;
+    m_begin = b;
+    m_end = e;
+    m_curr = b;
 }
 
 
@@ -127,9 +132,9 @@ inline MemoryOutputStreambuf::~MemoryOutputStreambuf() noexcept
 {
 }
 
-inline void MemoryOutputStreambuf::set_buffer(char* begin, char* end) noexcept
+inline void MemoryOutputStreambuf::set_buffer(char* b, char* e) noexcept
 {
-    setp(begin, end);
+    setp(b, e);
 }
 
 inline size_t MemoryOutputStreambuf::size() const noexcept
@@ -147,24 +152,31 @@ inline MemoryInputStream::~MemoryInputStream() noexcept
 {
 }
 
-inline void MemoryInputStream::set_buffer(const char* begin, const char* end) noexcept
+inline void MemoryInputStream::set_buffer(const char* b, const char* e) noexcept
 {
-    m_streambuf.set_buffer(begin, end);
+    m_streambuf.set_buffer(b, e);
     clear();
 }
 
-inline void MemoryInputStream::set_string(const std::string& str)
+template <size_t N> inline void MemoryInputStream::set_buffer(const char (&buffer)[N]) noexcept
 {
-    const char* begin = str.data();
-    const char* end = begin + str.size();
-    set_buffer(begin, end);
+    const char* b = buffer;
+    const char* e = b + N;
+    set_buffer(b, e);
+}
+
+inline void MemoryInputStream::set_string(const std::string& str) noexcept
+{
+    const char* b = str.data();
+    const char* e = b + str.size();
+    set_buffer(b, e);
 }
 
 inline void MemoryInputStream::set_c_string(const char* c_str) noexcept
 {
-    const char* begin = c_str;
-    const char* end = begin + traits_type::length(c_str);
-    set_buffer(begin, end);
+    const char* b = c_str;
+    const char* e = b + traits_type::length(c_str);
+    set_buffer(b, e);
 }
 
 
@@ -177,9 +189,9 @@ inline MemoryOutputStream::~MemoryOutputStream() noexcept
 {
 }
 
-inline void MemoryOutputStream::set_buffer(char* begin, char* end) noexcept
+inline void MemoryOutputStream::set_buffer(char* b, char* e) noexcept
 {
-    m_streambuf.set_buffer(begin, end);
+    m_streambuf.set_buffer(b, e);
     clear();
 }
 

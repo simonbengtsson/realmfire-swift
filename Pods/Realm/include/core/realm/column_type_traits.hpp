@@ -22,6 +22,7 @@
 #include <realm/column_fwd.hpp>
 #include <realm/column_type.hpp>
 #include <realm/data_type.hpp>
+#include <realm/array.hpp>
 
 namespace realm {
 
@@ -105,12 +106,8 @@ struct ColumnTypeTraits<util::Optional<OldDateTime>> : ColumnTypeTraits<util::Op
 
 template <>
 struct ColumnTypeTraits<StringData> {
-    using column_type = StringEnumColumn;
-    using leaf_type = ArrayInteger;
-    using sum_type = int64_t;
     static const DataType id = type_String;
     static const ColumnType column_id = col_type_String;
-    static const ColumnType real_column_type = col_type_String;
 };
 
 template <>
