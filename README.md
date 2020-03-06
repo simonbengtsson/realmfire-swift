@@ -1,9 +1,9 @@
+NOTE: This project will not be developed further since firestore has been released
+
 # RealmFire for Swift
 RealmFire's aim is to automatically sync a local realm database with firebase.
 
-*NOTE! This is an inofficial library which currently is nothing more then a proof of concept. Feel free to post issues if you have any feedback or let me know that you aim to use it and for what.*
-
-The library offers similar functionality as the Realm Mobile Platform which is the official realm sync solution and is the better choice in most cases. RealmFire is useful when you are already invested in firebase or if you are developing a service for platforms not supported by Realm Mobile Platform such as the web.
+The library aim to offer a similar functionality as the Realm Mobile Platform which is the official realm sync solution and is the better choice in most cases. RealmFire is useful when you are already invested in firebase or if you are developing a service for platforms not supported by Realm Mobile Platform such as the web.
 
 The advantage of using realm, and not only the firebase sdk, is that you get an offline first application. It will sync data when network is available, but it can handle months without any connection if necessary.
 
